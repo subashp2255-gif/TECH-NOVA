@@ -1,5 +1,5 @@
 import React from 'react';
-import { Card, CardContent } from '../shared/Card';
+import { Card } from '../shared/Card';
 import { Badge } from '../shared/Badge';
 import { ShieldCheck, Lock } from 'lucide-react';
 import LoginForm from './LoginForm';
@@ -19,7 +19,7 @@ export default function LoginCard({ onSubmit, loading, errorMsg, setErrorMsg }) 
         <div>
           <h2 className="text-2xl font-extrabold text-navy tracking-tight">Welcome back</h2>
           <p className="text-xs text-slate-500 font-medium mt-1 leading-relaxed">
-            Sign in with your college or staff credentials to continue.
+            Sign in using your registered email, Staff ID or Admin ID.
           </p>
         </div>
       </div>

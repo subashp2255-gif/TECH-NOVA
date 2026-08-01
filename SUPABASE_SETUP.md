@@ -41,11 +41,41 @@ Navigate to your **Supabase Dashboard** -> **SQL Editor** and run the migration 
 10. `10_checkin_checkout_rpcs.sql`: Defines `check_in_booking` and `check_out_booking` desk verification RPCs.
 11. `11_admin_ops_rpcs.sql`: Defines `set_user_account_status`, `disable_slot`, `set_room_status`, `set_seat_maintenance` admin RPCs.
 12. `12_seed_data.sql`: Seeds Central University Library, 2 floors, 40 seats (A-101 to A-140), time slots, and default booking policies.
-13. `13_automation_cron_jobs.sql`: Creates `automation_execution_logs` table, `SECURITY DEFINER` automation functions (`fn_run_auto_01_no_show_release`, `fn_run_auto_02_waitlist_allocation`, `fn_run_auto_03_waitlist_expiration`, `fn_run_auto_04_occupancy_alerts`), and registers 5-minute recurring `pg_cron` schedules.
+13. `13_automation_cron_jobs.sql`: Creates `automation_execution_logs` table, `SECURITY DEFINER` automation functions, and registers 5-minute recurring `pg_cron` schedules.
+14. `14_waitlist_demo_scenario.sql`: Creates test scenario metadata and transactional `prepare_waitlist_demo_scenario` RPC.
+15. `15_real_supabase_auth.sql`: Adds `staff_id`, `admin_id`, `login_identifier` columns, lower-case unique indexes, and `fn_get_auth_email_by_identifier` RPC for secure Staff/Admin ID login email resolution without account enumeration.
 
 ---
 
-## 4. Enabling Realtime Tables
+## 4. Method for Creating Accounts in Supabase
+
+### A. Creating the First Super Admin
+1. Open Supabase Dashboard -> **Authentication** -> **Users** -> Click **Add User** -> **Create User**.
+2. Email: `admin@college.edu`
+3. Password: Set a strong password.
+4. Go to **SQL Editor** and promote the user profile to Super Admin:
+```sql
+UPDATE public.profiles
+SET role = 'super_admin',
+    admin_id = 'ADM001',
+    login_identifier = 'adm001',
+    status = 'active'
+WHERE email = 'admin@college.edu';
+```
+
+### B. Inviting Librarians & Staff
+1. Admin Dashboard -> **Staff Management** (`/admin/staff`).
+2. Add Staff Member with Staff ID (e.g. `STAFF001`), Registered Email (`staff@college.edu`), and Role (`librarian`).
+3. Or create via Supabase Dashboard -> **Authentication** -> **Invite User**, then set `staff_id = 'STAFF001'` in `public.profiles`.
+
+### C. Student Self-Registration
+1. Students register directly on the frontend at `/signup`.
+2. Input: Full Name, Registration Number (`2024CSE001`), Department, Year, Email, Password.
+3. Automatically assigns `role = 'student'` and `login_identifier = lower(email)`.
+
+---
+
+## 5. Enabling Realtime Tables
 
 In the **Supabase Dashboard**:
 1. Go to **Database** -> **Publications**.
@@ -58,58 +88,3 @@ In the **Supabase Dashboard**:
    - `slots`
    - `waitlist_entries`
    - `notifications`
-   - `seat_maintenance`
-   - `automation_execution_logs`
-
----
-
-## 5. Storage Bucket Configuration (`floor-maps`)
-
-1. Go to **Storage** -> **Create Bucket**.
-2. Name the bucket: `floor-maps`.
-3. Set Public to **Public**.
-4. RLS Policies:
-   - **SELECT**: Authenticated users can view permitted floor map images.
-   - **INSERT / UPDATE**: Authorized Librarians and Admins.
-   - **DELETE**: Admins only.
-
----
-
-## 6. How to Create Demo Accounts & Assign Roles
-
-### Option A: Create Users via App UI (Signup)
-Students sign up on `/signup`. Their profile is created automatically in `public.profiles` with `role = 'student'`.
-
-### Option B: Promote User to Librarian or Admin via SQL
-To promote a user to `admin` or `librarian`, run the following in SQL Editor:
-
-```sql
--- Promote to Admin
-UPDATE public.profiles
-SET role = 'admin'
-WHERE email = 'admin@college.edu';
-
--- Promote to Librarian
-UPDATE public.profiles
-SET role = 'librarian'
-WHERE email = 'librarian@college.edu';
-```
-
----
-
-## 7. Realtime Cross-Dashboard Verification Workflows
-
-1. **Student Seat Booking**:
-   - Student books Seat A-105 on Student Portal.
-   - Immediately appears on Librarian Desk and Admin Live Operations without refreshing.
-
-2. **Librarian Check-In**:
-   - Staff verifies student QR code.
-   - Live occupancy metrics increase instantly across all dashboards.
-
-3. **Admin Account Blocking & Ejection**:
-   - Admin blocks a student's account on Admin Control Panel.
-   - The student's browser immediately receives the Realtime signal, clears cached state, and redirects to `/login` with an "Account Blocked" notification. RLS blocks further data operations.
-
-4. **Backend Automated Jobs**:
-   - `pg_cron` executes `AUTO-01`, `AUTO-02`, `AUTO-03`, and `AUTO-04` every 5 minutes in background without needing any active browser tab open.

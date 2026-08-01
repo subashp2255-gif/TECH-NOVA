@@ -20,13 +20,12 @@ export const AuthProvider = ({ children }) => {
     }
   });
 
-  // Listen to Supabase Auth State and Profile Block Status
+  // Rehydrate initial user & subscribe to Supabase Auth state
   useEffect(() => {
     const currentUser = authService.getCurrentUser();
     setUser(currentUser);
     setLoading(false);
 
-    // Subscribe to Auth changes
     const { data: authListener } = supabase.auth.onAuthStateChange(async (event, session) => {
       if (session?.user) {
         const { data: profile } = await supabase
@@ -36,10 +35,11 @@ export const AuthProvider = ({ children }) => {
           .single();
 
         if (profile) {
-          if (profile.status === 'blocked' || profile.status === 'suspended') {
-            toast.error(`Account ${profile.status.toUpperCase()}: ${profile.blocked_reason || 'Access revoked'}`);
+          const status = String(profile.status || profile.account_status || 'active').toLowerCase();
+          if (status === 'blocked' || status === 'suspended') {
             await authService.logout();
             setUser(null);
+            window.location.href = status === 'blocked' ? '/account-blocked' : '/account-suspended';
             return;
           }
         }
@@ -53,22 +53,24 @@ export const AuthProvider = ({ children }) => {
     };
   }, []);
 
-  // Realtime listener for active user status updates (e.g. Admin blocks user live)
+  // Realtime subscription to profiles table for live ejection on admin block/suspend
   useEffect(() => {
     if (!user?.id) return;
 
     const profileChannel = supabase
-      .channel(`profile-status-${user.id}`)
+      .channel(`profile-eject-${user.id}`)
       .on(
         'postgres_changes',
         { event: 'UPDATE', schema: 'public', table: 'profiles', filter: `id=eq.${user.id}` },
         async (payload) => {
-          const updatedProfile = payload.new;
-          if (updatedProfile.status === 'blocked' || updatedProfile.status === 'suspended') {
-            toast.error(`ALERT: Your account was ${updatedProfile.status.toUpperCase()} by an administrator. Reason: ${updatedProfile.blocked_reason || 'Policy Violation'}`);
+          const updated = payload.new;
+          const status = String(updated.status || updated.account_status || 'active').toLowerCase();
+
+          if (status === 'blocked' || status === 'suspended') {
+            toast.error(`ALERT: Your account was ${status.toUpperCase()} by an administrator.`);
             await authService.logout();
             setUser(null);
-            window.location.href = '/login';
+            window.location.href = status === 'blocked' ? '/account-blocked' : '/account-suspended';
           }
         }
       )
@@ -79,11 +81,20 @@ export const AuthProvider = ({ children }) => {
     };
   }, [user?.id]);
 
-  const login = async (identifier, password) => {
-    const loggedInUser = await authService.login(identifier, password);
-    setUser(loggedInUser);
-    broadcast({ type: 'login', user: loggedInUser });
-    return loggedInUser;
+  const login = async (identifier, password, rememberMe = true) => {
+    try {
+      const loggedInUser = await authService.login(identifier, password, rememberMe);
+      setUser(loggedInUser);
+      broadcast({ type: 'login', user: loggedInUser });
+      return loggedInUser;
+    } catch (err) {
+      if (err.code === 'ACCOUNT_BLOCKED') {
+        window.location.href = '/account-blocked';
+      } else if (err.code === 'ACCOUNT_SUSPENDED') {
+        window.location.href = '/account-suspended';
+      }
+      throw err;
+    }
   };
 
   const logout = async () => {

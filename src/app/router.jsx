@@ -6,6 +6,10 @@ import { ROLES } from '../data/seedData';
 
 // Shared Pages
 import LoginPage from '../pages/LoginPage';
+import StudentSignUpPage from '../pages/StudentSignUpPage';
+import ResetPasswordPage from '../pages/ResetPasswordPage';
+import AccountBlockedPage from '../pages/AccountBlockedPage';
+import AccountSuspendedPage from '../pages/AccountSuspendedPage';
 import UnauthorizedPage from '../pages/UnauthorizedPage';
 import NotFoundPage from '../pages/NotFoundPage';
 
@@ -75,6 +79,26 @@ const router = createBrowserRouter([
   {
     path: '/login',
     element: <LoginPage />,
+  },
+  {
+    path: '/signup',
+    element: <StudentSignUpPage />,
+  },
+  {
+    path: '/forgot-password',
+    element: <Navigate to="/login" replace />,
+  },
+  {
+    path: '/reset-password',
+    element: <ResetPasswordPage />,
+  },
+  {
+    path: '/account-blocked',
+    element: <AccountBlockedPage />,
+  },
+  {
+    path: '/account-suspended',
+    element: <AccountSuspendedPage />,
   },
   {
     path: '/unauthorized',
