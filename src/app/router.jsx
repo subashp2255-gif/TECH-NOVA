@@ -22,26 +22,49 @@ import WaitingList from '../features/student/WaitingList';
 import Notifications from '../features/student/Notifications';
 import Profile from '../features/student/Profile';
 
-// Librarian Features
+// Librarian Features (All 16 Operations Modules)
 import LibrarianDashboard from '../features/librarian/LibrarianDashboard';
 import QRScannerPage from '../features/librarian/QRScannerPage';
+import CheckInOutPage from '../features/librarian/CheckInOutPage';
 import StaffReservationsPage from '../features/librarian/StaffReservationsPage';
+import WalkInAllocationPage from '../features/librarian/WalkInAllocationPage';
 import StaffWaitlistPage from '../features/librarian/StaffWaitlistPage';
+import BookingLookupPage from '../features/librarian/BookingLookupPage';
+import LiveOccupancyPage from '../features/librarian/LiveOccupancyPage';
 import NoShowsMonitorPage from '../features/librarian/NoShowsMonitorPage';
-import PolicySettingsPage from '../features/librarian/PolicySettingsPage';
+import SeatMaintenancePage from '../features/librarian/SeatMaintenancePage';
+import IncidentReportsPage from '../features/librarian/IncidentReportsPage';
+import LibrarianNotificationsPage from '../features/librarian/LibrarianNotificationsPage';
+import LibrarianActivityLogsPage from '../features/librarian/LibrarianActivityLogsPage';
+import LibrarianReportsPage from '../features/librarian/LibrarianReportsPage';
+import ShiftHandoverPage from '../features/librarian/ShiftHandoverPage';
 import LibrarianProfilePage from '../features/librarian/LibrarianProfilePage';
 
-// Admin Features
+// Admin Features (All 20 Production Control System Modules)
 import AdminDashboard from '../features/admin/AdminDashboard';
+import LiveOperationsPage from '../features/admin/LiveOperationsPage';
 import StudentManagementPage from '../features/admin/StudentManagementPage';
 import StaffManagementPage from '../features/admin/StaffManagementPage';
+import RolesPermissionsPage from '../features/admin/RolesPermissionsPage';
+import PenaltiesRestrictionsPage from '../features/admin/PenaltiesRestrictionsPage';
+import LibrariesRoomsPage from '../features/admin/LibrariesRoomsPage';
 import SeatManagementPage from '../features/admin/SeatManagementPage';
 import SlotConfigPage from '../features/admin/SlotConfigPage';
+import AcademicCalendarPage from '../features/admin/AcademicCalendarPage';
+import BookingRulesPage from '../features/admin/BookingRulesPage';
 import AdminBookingsPage from '../features/admin/AdminBookingsPage';
 import AdminWaitlistPage from '../features/admin/AdminWaitlistPage';
+import OverridesApprovalsPage from '../features/admin/OverridesApprovalsPage';
+import AnnouncementsPage from '../features/admin/AnnouncementsPage';
+import SupportTicketsPage from '../features/admin/SupportTicketsPage';
+import StaffShiftsPage from '../features/admin/StaffShiftsPage';
 import ReportsAnalyticsPage from '../features/admin/ReportsAnalyticsPage';
-import AdminSettingsPage from '../features/admin/AdminSettingsPage';
+import BulkDataPage from '../features/admin/BulkDataPage';
+import SystemHealthPage from '../features/admin/SystemHealthPage';
+import SecurityCentrePage from '../features/admin/SecurityCentrePage';
 import AuditLogsPage from '../features/admin/AuditLogsPage';
+import AutomationRulesPage from '../features/admin/AutomationRulesPage';
+import AdminSettingsPage from '../features/admin/AdminSettingsPage';
 import AdminProfilePage from '../features/admin/AdminProfilePage';
 
 const router = createBrowserRouter([
@@ -79,7 +102,7 @@ const router = createBrowserRouter([
     ],
   },
 
-  // LIBRARIAN DASHBOARD ROUTES
+  // LIBRARIAN DASHBOARD ROUTES (16 Operations Modules)
   {
     path: '/librarian',
     element: (
@@ -93,15 +116,25 @@ const router = createBrowserRouter([
       { path: '', element: <Navigate to="/librarian/dashboard" replace /> },
       { path: 'dashboard', element: <LibrarianDashboard /> },
       { path: 'scan-entry', element: <QRScannerPage /> },
+      { path: 'check-in-out', element: <CheckInOutPage /> },
       { path: 'bookings', element: <StaffReservationsPage /> },
+      { path: 'walk-in', element: <WalkInAllocationPage /> },
       { path: 'waitlist', element: <StaffWaitlistPage /> },
-      { path: 'students', element: <NoShowsMonitorPage /> },
-      { path: 'settings', element: <PolicySettingsPage /> },
+      { path: 'lookup', element: <BookingLookupPage /> },
+      { path: 'occupancy', element: <LiveOccupancyPage /> },
+      { path: 'no-shows', element: <NoShowsMonitorPage /> },
+      { path: 'students', element: <Navigate to="/librarian/no-shows" replace /> },
+      { path: 'maintenance', element: <SeatMaintenancePage /> },
+      { path: 'incidents', element: <IncidentReportsPage /> },
+      { path: 'notifications', element: <LibrarianNotificationsPage /> },
+      { path: 'activity-logs', element: <LibrarianActivityLogsPage /> },
+      { path: 'analytics', element: <LibrarianReportsPage /> },
+      { path: 'handover', element: <ShiftHandoverPage /> },
       { path: 'profile', element: <LibrarianProfilePage /> },
     ],
   },
 
-  // ADMIN DASHBOARD ROUTES
+  // ADMIN DASHBOARD ROUTES (20 Complete Control System Modules)
   {
     path: '/admin',
     element: (
@@ -114,15 +147,34 @@ const router = createBrowserRouter([
     children: [
       { path: '', element: <Navigate to="/admin/dashboard" replace /> },
       { path: 'dashboard', element: <AdminDashboard /> },
+      { path: 'live-operations', element: <LiveOperationsPage /> },
       { path: 'students', element: <StudentManagementPage /> },
       { path: 'staff', element: <StaffManagementPage /> },
+      { path: 'roles-permissions', element: <RolesPermissionsPage /> },
+      { path: 'penalties', element: <PenaltiesRestrictionsPage /> },
+      { path: 'libraries-rooms', element: <LibrariesRoomsPage /> },
       { path: 'seats', element: <SeatManagementPage /> },
       { path: 'slots', element: <SlotConfigPage /> },
+      { path: 'academic-calendar', element: <AcademicCalendarPage /> },
+      { path: 'booking-rules', element: <BookingRulesPage /> },
       { path: 'bookings', element: <AdminBookingsPage /> },
       { path: 'waitlist', element: <AdminWaitlistPage /> },
+      { path: 'maintenance', element: <SeatManagementPage /> },
+      { path: 'incidents', element: <SeatManagementPage /> },
+      { path: 'overrides', element: <OverridesApprovalsPage /> },
+      { path: 'notifications', element: <AnnouncementsPage /> },
+      { path: 'announcements', element: <AnnouncementsPage /> },
+      { path: 'support', element: <SupportTicketsPage /> },
+      { path: 'staff-shifts', element: <StaffShiftsPage /> },
+      { path: 'handovers', element: <StaffShiftsPage /> },
       { path: 'reports', element: <ReportsAnalyticsPage /> },
-      { path: 'settings', element: <AdminSettingsPage /> },
+      { path: 'bulk-data', element: <BulkDataPage /> },
+      { path: 'database-usage', element: <ReportsAnalyticsPage /> },
+      { path: 'system-health', element: <SystemHealthPage /> },
+      { path: 'security', element: <SecurityCentrePage /> },
       { path: 'audit-logs', element: <AuditLogsPage /> },
+      { path: 'automation', element: <AutomationRulesPage /> },
+      { path: 'settings', element: <AdminSettingsPage /> },
       { path: 'profile', element: <AdminProfilePage /> },
     ],
   },

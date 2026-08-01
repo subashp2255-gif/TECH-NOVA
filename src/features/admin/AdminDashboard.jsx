@@ -56,7 +56,7 @@ export default function AdminDashboard() {
       setRecentBookings((bookings || []).slice(0, 8));
     } catch (err) {
       console.error('Failed to load admin stats:', err);
-    } fontFinally: {
+    } finally {
       setLoading(false);
     }
   };
@@ -72,7 +72,7 @@ export default function AdminDashboard() {
   return (
     <div className="space-y-8 animate-in fade-in duration-300 pb-12">
       {/* Hero Banner */}
-      <div className="relative overflow-hidden rounded-3xl bg-gradient-to-r from-slate-900 via-indigo-950 to-slate-900 p-6 sm:p-8 text-white shadow-2xl border border-indigo-900/60">
+      <div className="relative overflow-hidden rounded-3xl bg-gradient-to-r from-navy via-indigo-950 to-navy p-6 sm:p-8 text-white shadow-xl border border-slate-800">
         <div className="relative z-10 flex flex-col md:flex-row md:items-center justify-between gap-6">
           <div className="space-y-2">
             <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-indigo-500/20 border border-indigo-400/30 text-indigo-300 text-xs font-semibold backdrop-blur-md">
@@ -101,7 +101,7 @@ export default function AdminDashboard() {
 
       {/* Metric Cards Grid */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <Card className="border border-slate-200 shadow-xs rounded-2xl bg-white hover:border-indigo-500/40 transition-all">
+        <Card className="border border-slate-200/80 shadow-xs rounded-2xl bg-white hover:border-indigo-500/40 transition-all">
           <CardContent className="p-4 sm:p-5 flex items-center gap-3">
             <div className="h-11 w-11 rounded-2xl bg-indigo-50 text-indigo-700 flex items-center justify-center shrink-0 border border-indigo-100">
               <Users size={22} />
@@ -113,7 +113,7 @@ export default function AdminDashboard() {
           </CardContent>
         </Card>
 
-        <Card className="border border-slate-200 shadow-xs rounded-2xl bg-white hover:border-teal-500/40 transition-all">
+        <Card className="border border-slate-200/80 shadow-xs rounded-2xl bg-white hover:border-teal-500/40 transition-all">
           <CardContent className="p-4 sm:p-5 flex items-center gap-3">
             <div className="h-11 w-11 rounded-2xl bg-teal-50 text-teal-700 flex items-center justify-center shrink-0 border border-teal-100">
               <UserCheck size={22} />
@@ -125,7 +125,7 @@ export default function AdminDashboard() {
           </CardContent>
         </Card>
 
-        <Card className="border border-slate-200 shadow-xs rounded-2xl bg-white hover:border-blue-500/40 transition-all">
+        <Card className="border border-slate-200/80 shadow-xs rounded-2xl bg-white hover:border-blue-500/40 transition-all">
           <CardContent className="p-4 sm:p-5 flex items-center gap-3">
             <div className="h-11 w-11 rounded-2xl bg-blue-50 text-brandBlue flex items-center justify-center shrink-0 border border-blue-100">
               <Armchair size={22} />
@@ -137,7 +137,7 @@ export default function AdminDashboard() {
           </CardContent>
         </Card>
 
-        <Card className="border border-slate-200 shadow-xs rounded-2xl bg-white hover:border-purple-500/40 transition-all">
+        <Card className="border border-slate-200/80 shadow-xs rounded-2xl bg-white hover:border-purple-500/40 transition-all">
           <CardContent className="p-4 sm:p-5 flex items-center gap-3">
             <div className="h-11 w-11 rounded-2xl bg-purple-50 text-purple-700 flex items-center justify-center shrink-0 border border-purple-100">
               <BookmarkCheck size={22} />
@@ -154,32 +154,32 @@ export default function AdminDashboard() {
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         <Button
           onClick={() => navigate('/admin/students')}
-          className="h-12 bg-white hover:bg-slate-50 text-navy border border-slate-200 font-bold text-xs rounded-2xl shadow-xs flex items-center justify-center gap-2"
+          className="h-12 bg-white hover:bg-slate-50 text-navy border border-slate-200/80 font-bold text-xs rounded-2xl shadow-xs flex items-center justify-center gap-2"
         >
           <Users size={16} className="text-indigo-600" /> Student Management
         </Button>
         <Button
           onClick={() => navigate('/admin/staff')}
-          className="h-12 bg-white hover:bg-slate-50 text-navy border border-slate-200 font-bold text-xs rounded-2xl shadow-xs flex items-center justify-center gap-2"
+          className="h-12 bg-white hover:bg-slate-50 text-navy border border-slate-200/80 font-bold text-xs rounded-2xl shadow-xs flex items-center justify-center gap-2"
         >
           <UserCheck size={16} className="text-teal-600" /> Staff Management
         </Button>
         <Button
           onClick={() => navigate('/admin/seats')}
-          className="h-12 bg-white hover:bg-slate-50 text-navy border border-slate-200 font-bold text-xs rounded-2xl shadow-xs flex items-center justify-center gap-2"
+          className="h-12 bg-white hover:bg-slate-50 text-navy border border-slate-200/80 font-bold text-xs rounded-2xl shadow-xs flex items-center justify-center gap-2"
         >
           <Armchair size={16} className="text-brandBlue" /> Seat Management
         </Button>
         <Button
           onClick={() => navigate('/admin/settings')}
-          className="h-12 bg-white hover:bg-slate-50 text-navy border border-slate-200 font-bold text-xs rounded-2xl shadow-xs flex items-center justify-center gap-2"
+          className="h-12 bg-white hover:bg-slate-50 text-navy border border-slate-200/80 font-bold text-xs rounded-2xl shadow-xs flex items-center justify-center gap-2"
         >
           <Settings size={16} className="text-purple-600" /> System Settings
         </Button>
       </div>
 
       {/* Recent System Activity Table */}
-      <Card className="border border-slate-200 rounded-2xl shadow-xs overflow-hidden bg-white">
+      <Card className="border border-slate-200/80 rounded-2xl shadow-xs overflow-hidden bg-white">
         <CardHeader className="border-b border-slate-100 bg-slate-50/80 p-4 flex flex-row items-center justify-between">
           <CardTitle className="text-base font-bold text-navy flex items-center gap-2">
             <BookmarkCheck size={18} className="text-indigo-600" /> Global System Reservations Log
@@ -187,7 +187,7 @@ export default function AdminDashboard() {
           <Button
             variant="outline"
             onClick={() => navigate('/admin/bookings')}
-            className="text-xs font-bold rounded-xl h-8"
+            className="text-xs font-bold rounded-xl h-8 border-slate-300 text-slate-600 hover:bg-slate-100"
           >
             View All Reservations →
           </Button>
@@ -200,7 +200,7 @@ export default function AdminDashboard() {
             <div className="overflow-x-auto">
               <table className="w-full text-left border-collapse text-xs">
                 <thead>
-                  <tr className="bg-slate-100/70 border-b border-slate-200 text-slate-500 font-bold uppercase text-[10px] tracking-wider">
+                  <tr className="bg-slate-100/70 border-b border-slate-200/80 text-slate-500 font-bold uppercase text-[10px] tracking-wider">
                     <th className="p-3.5">Booking ID</th>
                     <th className="p-3.5">Student</th>
                     <th className="p-3.5">Date</th>
@@ -211,7 +211,7 @@ export default function AdminDashboard() {
                 </thead>
                 <tbody className="divide-y divide-slate-100">
                   {recentBookings.map((b) => (
-                    <tr key={b.id} className="hover:bg-slate-50 transition-colors">
+                    <tr key={b.id} className="hover:bg-slate-50/80 transition-colors">
                       <td className="p-3.5 font-mono font-bold text-navy">{b.id}</td>
                       <td className="p-3.5 font-bold text-navy">{b.studentName}</td>
                       <td className="p-3.5 font-mono">{b.bookingDate}</td>
