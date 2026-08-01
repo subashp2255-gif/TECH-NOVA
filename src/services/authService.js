@@ -236,8 +236,10 @@ export const authService = {
       } catch { /* proceed with input */ }
     }
 
+    const base = import.meta.env.BASE_URL || '/';
+    const resetPath = `${base}reset-password`.replace(/\/\//g, '/');
     const { error } = await supabase.auth.resetPasswordForEmail(targetEmail, {
-      redirectTo: `${window.location.origin}/reset-password`
+      redirectTo: `${window.location.origin}${resetPath}`
     });
 
     if (error) {

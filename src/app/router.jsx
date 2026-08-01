@@ -1,6 +1,12 @@
 import React from 'react';
 import { createBrowserRouter, RouterProvider, Navigate } from 'react-router-dom';
 import ProtectedRoute from '../auth/ProtectedRoute';
+
+// Derive basename from Vite's base URL.
+// Dev: base='/' → basename=''
+// GitHub Pages: base='/TECH-NOVA/' → basename='/TECH-NOVA'
+const viteBase = import.meta.env.BASE_URL || '/';
+const routerBasename = viteBase === '/' ? '' : viteBase.replace(/\/$/, '');
 import RoleRoute from '../auth/RoleRoute';
 import { ROLES } from '../data/seedData';
 
@@ -206,7 +212,7 @@ const router = createBrowserRouter([
     path: '*',
     element: <NotFoundPage />,
   },
-]);
+], { basename: routerBasename });
 
 export default function AppRouter() {
   return <RouterProvider router={router} />;

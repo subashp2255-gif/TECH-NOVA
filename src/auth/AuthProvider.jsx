@@ -36,10 +36,11 @@ export const AuthProvider = ({ children }) => {
 
         if (profile) {
           const status = String(profile.status || profile.account_status || 'active').toLowerCase();
+          const base = import.meta.env.BASE_URL || '/';
           if (status === 'blocked' || status === 'suspended') {
             await authService.logout();
             setUser(null);
-            window.location.href = status === 'blocked' ? '/account-blocked' : '/account-suspended';
+            window.location.href = `${base}${status === 'blocked' ? 'account-blocked' : 'account-suspended'}`;
             return;
           }
         }
@@ -70,7 +71,8 @@ export const AuthProvider = ({ children }) => {
             toast.error(`ALERT: Your account was ${status.toUpperCase()} by an administrator.`);
             await authService.logout();
             setUser(null);
-            window.location.href = status === 'blocked' ? '/account-blocked' : '/account-suspended';
+            const base = import.meta.env.BASE_URL || '/';
+            window.location.href = `${base}${status === 'blocked' ? 'account-blocked' : 'account-suspended'}`;
           }
         }
       )
@@ -89,9 +91,11 @@ export const AuthProvider = ({ children }) => {
       return loggedInUser;
     } catch (err) {
       if (err.code === 'ACCOUNT_BLOCKED') {
-        window.location.href = '/account-blocked';
+        const base = import.meta.env.BASE_URL || '/';
+        window.location.href = `${base}account-blocked`;
       } else if (err.code === 'ACCOUNT_SUSPENDED') {
-        window.location.href = '/account-suspended';
+        const base = import.meta.env.BASE_URL || '/';
+        window.location.href = `${base}account-suspended`;
       }
       throw err;
     }
