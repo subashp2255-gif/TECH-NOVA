@@ -121,9 +121,8 @@ export default function LiveOperationsPage() {
               </div>
               <Button
                 onClick={() => handleToggleRoom(room)}
-                className={`h-9 px-4 text-xs font-bold rounded-xl shadow-xs ${
-                  room.status === 'closed' ? 'bg-emerald-600 hover:bg-emerald-700 text-white' : 'bg-red-600 hover:bg-red-700 text-white'
-                }`}
+                className={`h-9 px-4 text-xs font-bold rounded-xl shadow-xs ${room.status === 'closed' ? 'bg-emerald-600 hover:bg-emerald-700 text-white' : 'bg-red-600 hover:bg-red-700 text-white'
+                  }`}
               >
                 {room.status === 'closed' ? 'Reopen Room' : 'Close Room'}
               </Button>

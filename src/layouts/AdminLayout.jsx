@@ -17,8 +17,7 @@ const NAV_GROUPS = [
   {
     title: 'OVERVIEW',
     items: [
-      { name: 'Dashboard', path: '/admin/dashboard', icon: LayoutDashboard },
-      { name: 'Live Operations', path: '/admin/live-operations', icon: Activity }
+      { name: 'Dashboard', path: '/admin/dashboard', icon: LayoutDashboard }
     ]
   },
   {

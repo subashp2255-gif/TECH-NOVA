@@ -45,7 +45,6 @@ import LibrarianProfilePage from '../features/librarian/LibrarianProfilePage';
 
 // Admin Features
 import AdminDashboard from '../features/admin/AdminDashboard';
-import LiveOperationsPage from '../features/admin/LiveOperationsPage';
 import StudentManagementPage from '../features/admin/StudentManagementPage';
 import StaffManagementPage from '../features/admin/StaffManagementPage';
 import RolesPermissionsPage from '../features/admin/RolesPermissionsPage';
@@ -171,7 +170,6 @@ const router = createBrowserRouter([
     children: [
       { path: '', element: <Navigate to="/admin/dashboard" replace /> },
       { path: 'dashboard', element: <AdminDashboard /> },
-      { path: 'live-operations', element: <LiveOperationsPage /> },
       { path: 'students', element: <StudentManagementPage /> },
       { path: 'staff', element: <StaffManagementPage /> },
       { path: 'roles-permissions', element: <RolesPermissionsPage /> },
