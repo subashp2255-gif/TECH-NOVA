@@ -1,6 +1,8 @@
 import React, { useEffect, useState } from 'react';
-import { db } from '../../services/mockDatabase';
+import { supabase } from '../../lib/supabase';
+import { librarianService } from '../../services/librarianService';
 import { useSync } from '../../hooks/useSync';
+import { db } from '../../services/mockDatabase';
 import { Card, CardContent, CardHeader, CardTitle } from '../../components/shared/Card';
 import { Button } from '../../components/shared/Button';
 import { Input } from '../../components/shared/Input';
@@ -26,6 +28,22 @@ export default function SeatManagementPage() {
   const fetchSeats = async () => {
     try {
       setLoading(true);
+      const { data, error } = await supabase.from('seats').select('*').order('seat_number');
+      if (!error && data && data.length > 0) {
+        setSeats(data.map(s => ({
+          id: s.id,
+          seatNumber: s.seat_number,
+          type: s.seat_type || 'Standard Desk',
+          zoneId: s.is_accessible ? 'zone-a' : 'zone-b',
+          powerOutlet: s.has_power_socket,
+          nearWindow: s.is_accessible,
+          status: s.status === 'available' ? 'active' : s.status
+        })));
+        return;
+      }
+    } catch { /* fallback */ }
+
+    try {
       const data = await db.read('seatsync_seats') || [];
       setSeats(data);
     } catch {
@@ -39,9 +57,7 @@ export default function SeatManagementPage() {
     fetchSeats();
   }, []);
 
-  useSync((event) => {
-    if (event?.type === 'storage_change') fetchSeats();
-  });
+  useSync(['seats', 'seatsync_seats'], fetchSeats);
 
   const handleAddSeat = async (e) => {
     e.preventDefault();
@@ -51,13 +67,28 @@ export default function SeatManagementPage() {
     }
 
     try {
-      const data = await db.read('seatsync_seats') || [];
-      const exists = data.find(s => s.seatNumber === newSeat.seatNumber.trim() || s.id === `SEAT-${newSeat.seatNumber.trim()}`);
-      if (exists) {
-        toast.error('Seat Number already exists.');
-        return;
+      const { data: roomData } = await supabase.from('rooms').select('id').limit(1).single();
+      if (roomData) {
+        const { error } = await supabase.from('seats').insert({
+          room_id: roomData.id,
+          seat_number: newSeat.seatNumber.trim(),
+          seat_type: newSeat.zoneId === 'zone-a' ? 'Quiet Study' : 'Group Discussion',
+          has_power_socket: newSeat.powerOutlet,
+          is_accessible: newSeat.nearWindow,
+          status: 'available'
+        });
+        if (!error) {
+          toast.success(`Seat ${newSeat.seatNumber.trim()} added successfully!`);
+          setAddModalOpen(false);
+          setNewSeat({ seatNumber: '', zoneId: 'zone-a', powerOutlet: true, nearWindow: false });
+          fetchSeats();
+          return;
+        }
       }
+    } catch { /* fallback */ }
 
+    try {
+      const data = await db.read('seatsync_seats') || [];
       const created = {
         id: `SEAT-${Date.now()}`,
         seatNumber: newSeat.seatNumber.trim(),
@@ -80,16 +111,30 @@ export default function SeatManagementPage() {
     }
   };
 
-  const handleToggleMaintenance = async (seatId) => {
+  const handleToggleMaintenance = async (seat) => {
     try {
-      const data = await db.read('seatsync_seats') || [];
-      const target = data.find(s => s.id === seatId);
-      if (target) {
-        target.status = target.status === 'active' ? 'maintenance' : 'active';
-        await db.write('seatsync_seats', data);
-        toast.success(`Seat ${target.seatNumber} status updated.`);
-        fetchSeats();
+      const isCurrentlyMaintenance = seat.status === 'maintenance';
+      if (isCurrentlyMaintenance) {
+        await supabase.from('seats').update({ status: 'available' }).eq('id', seat.id);
+      } else {
+        await librarianService.reportSeatMaintenance({
+          seatNumber: seat.seatNumber,
+          category: 'Desk Maintenance',
+          description: 'Flagged for maintenance by administrator',
+          priority: 'Medium'
+        });
       }
+
+      // Local fallback sync
+      const data = await db.read('seatsync_seats') || [];
+      const target = data.find(s => s.id === seat.id || s.seatNumber === seat.seatNumber);
+      if (target) {
+        target.status = isCurrentlyMaintenance ? 'active' : 'maintenance';
+        await db.write('seatsync_seats', data);
+      }
+
+      toast.success(`Seat ${seat.seatNumber} status updated.`);
+      fetchSeats();
     } catch {
       toast.error('Failed to update seat status.');
     }
@@ -128,7 +173,7 @@ export default function SeatManagementPage() {
             placeholder="Search seat number, type..."
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            className="pl-9 h-10 text-xs rounded-xl border-slate-300"
+            className="pl-9 h-10 text-xs rounded-xl border-slate-300 text-navy"
           />
         </div>
       </Card>
@@ -152,29 +197,29 @@ export default function SeatManagementPage() {
                     <th className="p-3.5 text-right">Action</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-slate-100">
+                <tbody className="divide-y divide-slate-100 font-mono">
                   {filtered.map(s => (
                     <tr key={s.id} className="hover:bg-slate-50 transition-colors">
                       <td className="p-3.5 font-bold text-navy">{s.seatNumber}</td>
-                      <td className="p-3.5 font-semibold text-slate-700">{s.type} ({s.zoneId === 'zone-a' ? 'Zone A' : 'Zone B'})</td>
-                      <td className="p-3.5">
+                      <td className="p-3.5 font-semibold text-slate-700 font-sans">{s.type} ({s.zoneId === 'zone-a' ? 'Zone A' : 'Zone B'})</td>
+                      <td className="p-3.5 font-sans">
                         {s.powerOutlet ? <span className="text-emerald-700 font-bold flex items-center gap-1"><Zap size={13} /> Yes</span> : <span className="text-slate-400">No</span>}
                       </td>
-                      <td className="p-3.5">
+                      <td className="p-3.5 font-sans">
                         {s.nearWindow ? <span className="text-amber-700 font-bold flex items-center gap-1"><Sun size={13} /> Yes</span> : <span className="text-slate-400">No</span>}
                       </td>
                       <td className="p-3.5">
-                        <Badge className={`text-[10px] font-bold ${s.status === 'active' ? 'bg-emerald-600 text-white' : 'bg-amber-500 text-white'}`}>
+                        <Badge className={`text-[10px] font-bold ${s.status === 'active' || s.status === 'available' ? 'bg-emerald-600 text-white' : 'bg-amber-600 text-white'}`}>
                           {s.status}
                         </Badge>
                       </td>
-                      <td className="p-3.5 text-right">
+                      <td className="p-3.5 text-right font-sans">
                         <Button
-                          onClick={() => handleToggleMaintenance(s.id)}
+                          onClick={() => handleToggleMaintenance(s)}
                           variant="outline"
-                          className="h-7 text-[11px] font-bold rounded-lg border-slate-300"
+                          className="h-7 text-[11px] font-bold rounded-lg border-slate-300 text-slate-700"
                         >
-                          {s.status === 'active' ? 'Set Maintenance' : 'Activate'}
+                          {s.status === 'active' || s.status === 'available' ? 'Set Maintenance' : 'Activate'}
                         </Button>
                       </td>
                     </tr>
@@ -187,7 +232,7 @@ export default function SeatManagementPage() {
       </Card>
 
       <Dialog open={addModalOpen} onOpenChange={setAddModalOpen}>
-        <DialogContent className="sm:max-w-md rounded-2xl p-6">
+        <DialogContent className="sm:max-w-md rounded-2xl p-6 bg-white text-navy">
           <DialogHeader>
             <DialogTitle className="text-lg font-bold text-navy">Add New Study Seat</DialogTitle>
             <DialogDescription className="text-xs text-slate-500 pt-1">
@@ -197,22 +242,22 @@ export default function SeatManagementPage() {
 
           <form onSubmit={handleAddSeat} className="space-y-4 pt-2">
             <div className="space-y-1.5">
-              <Label className="text-xs font-bold">Seat Number / Code</Label>
+              <Label className="text-xs font-bold text-slate-700">Seat Number / Code</Label>
               <Input
                 placeholder="e.g. S-41"
                 value={newSeat.seatNumber}
                 onChange={(e) => setNewSeat({ ...newSeat, seatNumber: e.target.value })}
-                className="h-10 text-xs font-bold"
+                className="h-10 text-xs font-bold bg-slate-50 border-slate-300 text-navy"
                 required
               />
             </div>
 
             <div className="space-y-1.5">
-              <Label className="text-xs font-bold">Zone Type</Label>
+              <Label className="text-xs font-bold text-slate-700">Zone Type</Label>
               <select
                 value={newSeat.zoneId}
                 onChange={(e) => setNewSeat({ ...newSeat, zoneId: e.target.value })}
-                className="w-full h-10 rounded-xl border border-slate-300 px-3 text-xs font-semibold bg-white"
+                className="w-full h-10 rounded-xl border border-slate-300 px-3 text-xs font-semibold bg-slate-50 text-navy"
               >
                 <option value="zone-a">Zone A — Quiet Study</option>
                 <option value="zone-b">Zone B — Group Discussion</option>

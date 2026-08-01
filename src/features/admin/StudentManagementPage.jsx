@@ -1,6 +1,9 @@
 import React, { useEffect, useState } from 'react';
-import { db } from '../../services/mockDatabase';
+import { supabase } from '../../lib/supabase';
+import { adminService } from '../../services/adminService';
+import { useAuth } from '../../auth/AuthProvider';
 import { useSync } from '../../hooks/useSync';
+import { db } from '../../services/mockDatabase';
 import { Card, CardContent, CardHeader, CardTitle } from '../../components/shared/Card';
 import { Button } from '../../components/shared/Button';
 import { Input } from '../../components/shared/Input';
@@ -11,6 +14,7 @@ import { Users, Search, Plus, UserCheck, ShieldAlert, CheckCircle2, RefreshCw } 
 import toast from 'react-hot-toast';
 
 export default function StudentManagementPage() {
+  const { user: adminUser } = useAuth();
   const [students, setStudents] = useState([]);
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(true);
@@ -27,6 +31,28 @@ export default function StudentManagementPage() {
   const fetchStudents = async () => {
     try {
       setLoading(true);
+      const { data, error } = await supabase
+        .from('profiles')
+        .select('*')
+        .eq('role', 'student')
+        .order('created_at', { ascending: false });
+
+      if (!error && data && data.length > 0) {
+        setStudents(data.map(p => ({
+          id: p.id,
+          collegeId: p.registration_number || p.id.substring(0, 8),
+          identifier: p.registration_number || p.id.substring(0, 8),
+          name: p.full_name,
+          email: p.email,
+          department: p.department || 'Computer Science',
+          noShowCount: p.no_show_count || 0,
+          status: (p.status || 'active').toUpperCase()
+        })));
+        return;
+      }
+    } catch { /* fallback */ }
+
+    try {
       const users = await db.read('seatsync_users') || [];
       setStudents(users.filter(u => u.role === 'STUDENT'));
     } catch {
@@ -40,9 +66,7 @@ export default function StudentManagementPage() {
     fetchStudents();
   }, []);
 
-  useSync((event) => {
-    if (event?.type === 'storage_change') fetchStudents();
-  });
+  useSync(['profiles', 'seatsync_users'], fetchStudents);
 
   const handleAddStudent = async (e) => {
     e.preventDefault();
@@ -52,51 +76,71 @@ export default function StudentManagementPage() {
     }
 
     try {
-      const users = await db.read('seatsync_users') || [];
-      const exists = users.find(u => u.collegeId === newStudent.collegeId.trim() || u.identifier === newStudent.collegeId.trim());
-      if (exists) {
-        toast.error('A student with this College ID already exists.');
-        return;
+      const email = newStudent.email.trim() || `${newStudent.collegeId.trim().toLowerCase()}@college.edu`;
+      const { data, error } = await supabase.auth.signUp({
+        email,
+        password: newStudent.password || 'student123',
+        options: {
+          data: {
+            full_name: newStudent.name.trim(),
+            registration_number: newStudent.collegeId.trim(),
+            department: newStudent.department,
+            role: 'student'
+          }
+        }
+      });
+
+      if (error) {
+        // Fallback to local DB creation if auth signup fails
+        const users = await db.read('seatsync_users') || [];
+        const created = {
+          id: `USR-${Date.now()}`,
+          identifier: newStudent.collegeId.trim(),
+          collegeId: newStudent.collegeId.trim(),
+          name: newStudent.name.trim(),
+          email,
+          password: newStudent.password || 'student123',
+          role: 'STUDENT',
+          status: 'ACTIVE',
+          department: newStudent.department,
+          noShowCount: 0,
+          createdAt: new Date().toISOString()
+        };
+        users.push(created);
+        await db.write('seatsync_users', users);
       }
 
-      const created = {
-        id: `USR-${Date.now()}`,
-        identifier: newStudent.collegeId.trim(),
-        collegeId: newStudent.collegeId.trim(),
-        name: newStudent.name.trim(),
-        email: newStudent.email.trim() || `${newStudent.collegeId.trim().toLowerCase()}@college.edu`,
-        password: newStudent.password || 'student123',
-        role: 'STUDENT',
-        status: 'ACTIVE',
-        department: newStudent.department,
-        noShowCount: 0,
-        createdAt: new Date().toISOString()
-      };
-
-      users.push(created);
-      await db.write('seatsync_users', users);
-      toast.success(`Student ${created.name} added successfully!`);
+      toast.success(`Student ${newStudent.name} registered successfully!`);
       setAddModalOpen(false);
       setNewStudent({ collegeId: '', name: '', email: '', password: 'student123', department: 'Computer Science & Engineering' });
       fetchStudents();
     } catch {
-      toast.error('Failed to add student.');
+      toast.error('Failed to register student account.');
     }
   };
 
-  const handleToggleStatus = async (studentId) => {
+  const handleToggleStatus = async (student) => {
     try {
+      const isCurrentlyActive = student.status === 'ACTIVE';
+      const newStatus = isCurrentlyActive ? 'blocked' : 'active';
+      const reason = isCurrentlyActive ? 'Restricted by administrator action' : 'Reinstated to good standing';
+
+      // Call admin service (executes set_user_account_status RPC)
+      await adminService.applyStudentRestriction(student.id, 'BLOCK', 30, reason, adminUser);
+
+      // Update DB fallback if applicable
       const users = await db.read('seatsync_users') || [];
-      const target = users.find(u => u.id === studentId);
+      const target = users.find(u => u.id === student.id || u.collegeId === student.collegeId);
       if (target) {
-        target.status = target.status === 'ACTIVE' ? 'RESTRICTED' : 'ACTIVE';
-        if (target.status === 'ACTIVE') target.noShowCount = 0;
+        target.status = isCurrentlyActive ? 'RESTRICTED' : 'ACTIVE';
+        if (!isCurrentlyActive) target.noShowCount = 0;
         await db.write('seatsync_users', users);
-        toast.success(`Updated status for ${target.name}.`);
-        fetchStudents();
       }
-    } catch {
-      toast.error('Failed to update student status.');
+
+      toast.success(`Updated status for ${student.name} to ${newStatus.toUpperCase()}.`);
+      fetchStudents();
+    } catch (err) {
+      toast.error(err.message || 'Failed to update student status.');
     }
   };
 
@@ -134,7 +178,7 @@ export default function StudentManagementPage() {
             placeholder="Search student by name, College ID, or email..."
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            className="pl-9 h-10 text-xs rounded-xl border-slate-300"
+            className="pl-9 h-10 text-xs rounded-xl border-slate-300 text-navy"
           />
         </div>
       </Card>
@@ -168,17 +212,17 @@ export default function StudentManagementPage() {
                       <td className="p-3.5 text-slate-500">{s.department || 'Computer Science'}</td>
                       <td className="p-3.5 font-bold">{s.noShowCount || 0} / 3</td>
                       <td className="p-3.5">
-                        <Badge className={`text-[10px] font-bold ${s.status === 'ACTIVE' ? 'bg-emerald-600 text-white' : 'bg-red-500 text-white'}`}>
+                        <Badge className={`text-[10px] font-bold ${s.status === 'ACTIVE' ? 'bg-emerald-600 text-white' : 'bg-red-600 text-white'}`}>
                           {s.status}
                         </Badge>
                       </td>
                       <td className="p-3.5 text-right">
                         <Button
-                          onClick={() => handleToggleStatus(s.id)}
+                          onClick={() => handleToggleStatus(s)}
                           variant="outline"
-                          className="h-7 text-[11px] font-bold rounded-lg border-slate-300"
+                          className="h-7 text-[11px] font-bold rounded-lg border-slate-300 text-slate-700"
                         >
-                          {s.status === 'ACTIVE' ? 'Restrict' : 'Activate'}
+                          {s.status === 'ACTIVE' ? 'Block Access' : 'Unblock Access'}
                         </Button>
                       </td>
                     </tr>
@@ -192,7 +236,7 @@ export default function StudentManagementPage() {
 
       {/* Add Student Modal */}
       <Dialog open={addModalOpen} onOpenChange={setAddModalOpen}>
-        <DialogContent className="sm:max-w-md rounded-2xl p-6">
+        <DialogContent className="sm:max-w-md rounded-2xl p-6 bg-white text-navy">
           <DialogHeader>
             <DialogTitle className="text-lg font-bold text-navy">Add New Student Account</DialogTitle>
             <DialogDescription className="text-xs text-slate-500 pt-1">
@@ -202,35 +246,35 @@ export default function StudentManagementPage() {
 
           <form onSubmit={handleAddStudent} className="space-y-4 pt-2">
             <div className="space-y-1.5">
-              <Label className="text-xs font-bold">College ID</Label>
+              <Label className="text-xs font-bold text-slate-700">College ID</Label>
               <Input
                 placeholder="e.g. 24AD099"
                 value={newStudent.collegeId}
                 onChange={(e) => setNewStudent({ ...newStudent, collegeId: e.target.value })}
-                className="h-10 text-xs font-mono"
+                className="h-10 text-xs font-mono bg-slate-50 border-slate-300 text-navy"
                 required
               />
             </div>
 
             <div className="space-y-1.5">
-              <Label className="text-xs font-bold">Full Student Name</Label>
+              <Label className="text-xs font-bold text-slate-700">Full Student Name</Label>
               <Input
                 placeholder="e.g. Rahul Kumar"
                 value={newStudent.name}
                 onChange={(e) => setNewStudent({ ...newStudent, name: e.target.value })}
-                className="h-10 text-xs"
+                className="h-10 text-xs bg-slate-50 border-slate-300 text-navy"
                 required
               />
             </div>
 
             <div className="space-y-1.5">
-              <Label className="text-xs font-bold">Email Address</Label>
+              <Label className="text-xs font-bold text-slate-700">Email Address</Label>
               <Input
                 type="email"
                 placeholder="e.g. rahul@college.edu"
                 value={newStudent.email}
                 onChange={(e) => setNewStudent({ ...newStudent, email: e.target.value })}
-                className="h-10 text-xs"
+                className="h-10 text-xs bg-slate-50 border-slate-300 text-navy"
               />
             </div>
 
