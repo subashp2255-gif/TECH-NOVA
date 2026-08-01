@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useMemo } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useAuth } from '../../auth/AuthProvider';
 import { bookingService } from '../../services/bookingService';
 import { db } from '../../services/mockDatabase';
@@ -7,16 +7,18 @@ import { Card, CardContent, CardHeader, CardTitle } from '../../components/share
 import { Button } from '../../components/shared/Button';
 import { Badge } from '../../components/shared/Badge';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '../../components/shared/Dialog';
-import { QrCode, Clock, MapPin, Calendar, AlertTriangle, CheckCircle2, XCircle, LogOut, ArrowRight } from 'lucide-react';
+import { QrCode, Clock, MapPin, Calendar, AlertTriangle, CheckCircle2, XCircle, LogOut, ArrowRight, ShieldCheck, RefreshCw } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import { format, parse, isAfter, isBefore } from 'date-fns';
 
 function getBookingState(booking) {
     if (!booking) return null;
-    const rawStatus = (booking.status || '').toLowerCase();
-    if (rawStatus === 'completed' || rawStatus === 'checked_out') return 'COMPLETED';
-    if (rawStatus === 'cancelled') return 'CANCELLED';
-    if (rawStatus === 'checkout_pending') return 'CHECKOUT_PENDING';
+    const rawStatus = (booking.status || '').toUpperCase();
+    if (rawStatus === 'CANCELLED_BY_ADMIN') return 'CANCELLED_BY_ADMIN';
+    if (rawStatus === 'CANCELLED_BY_STUDENT' || rawStatus === 'CANCELLED') return 'CANCELLED_BY_STUDENT';
+    if (rawStatus === 'COMPLETED' || rawStatus === 'CHECKED_OUT') return 'COMPLETED';
+    if (rawStatus === 'CHECKOUT_PENDING') return 'CHECKOUT_PENDING';
 
     const now = new Date();
     const datePart = booking.bookingDate || format(now, 'yyyy-MM-dd');
@@ -34,7 +36,7 @@ function getBookingState(booking) {
     }
 
     if (!startDateTime) {
-        return rawStatus === 'active' ? 'ACTIVE' : 'UPCOMING';
+        return rawStatus === 'ACTIVE' ? 'ACTIVE' : 'UPCOMING';
     }
 
     if (isAfter(now, endDateTime)) return 'COMPLETED';
@@ -44,6 +46,7 @@ function getBookingState(booking) {
 
 export default function MyReservations() {
     const { user } = useAuth();
+    const navigate = useNavigate();
     const [bookings, setBookings] = useState([]);
     const [loading, setLoading] = useState(true);
     const [expandedQrBookingId, setExpandedQrBookingId] = useState(null);
@@ -166,22 +169,27 @@ export default function MyReservations() {
                     {bookings.map(booking => {
                         const computedState = getBookingState(booking);
                         const isExpanded = expandedQrBookingId === booking.id;
+                        const isCancelledByAdmin = computedState === 'CANCELLED_BY_ADMIN';
 
                         return (
-                            <Card key={booking.id} className="border-2 border-slate-200 hover:border-brandBlue/40 transition-all rounded-2xl bg-white overflow-hidden shadow-xs">
+                            <Card key={booking.id} className={`border-2 transition-all rounded-2xl overflow-hidden shadow-xs ${
+                                isCancelledByAdmin ? 'border-red-200 bg-red-50/10' : 'border-slate-200 hover:border-brandBlue/40 bg-white'
+                            }`}>
                                 <CardContent className="p-5 space-y-4">
                                     <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 pb-3">
                                         <div className="flex items-center gap-2">
                                             <Badge className={`font-bold text-xs ${
+                                                isCancelledByAdmin ? 'bg-red-600 text-white' :
                                                 computedState === 'ACTIVE' ? 'bg-emerald-500 text-white' :
                                                 computedState === 'CHECKOUT_PENDING' ? 'bg-amber-500 text-white' :
                                                 computedState === 'COMPLETED' ? 'bg-slate-500 text-white' :
-                                                computedState === 'CANCELLED' ? 'bg-red-500 text-white' : 'bg-brandBlue text-white'
+                                                computedState === 'CANCELLED_BY_STUDENT' ? 'bg-red-400 text-white' : 'bg-brandBlue text-white'
                                             }`}>
-                                                {computedState === 'ACTIVE' ? 'Active Session' :
+                                                {isCancelledByAdmin ? 'Cancelled by Library' :
+                                                 computedState === 'ACTIVE' ? 'Active Session' :
                                                  computedState === 'CHECKOUT_PENDING' ? 'Pending Checkout' :
                                                  computedState === 'COMPLETED' ? 'Completed' :
-                                                 computedState === 'CANCELLED' ? 'Cancelled' : 'Upcoming'}
+                                                 computedState === 'CANCELLED_BY_STUDENT' ? 'Cancelled by You' : 'Upcoming'}
                                             </Badge>
                                             <span className="text-xs font-mono font-bold text-slate-500">ID: {booking.id}</span>
                                         </div>
@@ -208,7 +216,26 @@ export default function MyReservations() {
                                         </div>
                                     </div>
 
-                                    {isExpanded && (
+                                    {/* Cancelled By Library Notice */}
+                                    {isCancelledByAdmin && (
+                                        <div className="p-3.5 bg-red-50 border border-red-200 rounded-xl text-xs space-y-1.5 animate-in fade-in">
+                                            <div className="flex items-center gap-2 font-bold text-red-900">
+                                                <AlertTriangle size={16} className="text-red-600 shrink-0" />
+                                                <span>Reservation Cancelled by Library Administration</span>
+                                            </div>
+                                            {booking.cancellationReason && (
+                                                <p className="text-slate-700 text-xs font-medium">
+                                                    Reason: <strong>{booking.cancellationReason}</strong>
+                                                </p>
+                                            )}
+                                            <div className="pt-1 border-t border-red-200/60 flex items-center gap-1.5 text-[11px] text-emerald-800 font-semibold">
+                                                <ShieldCheck size={14} className="text-emerald-600 shrink-0" />
+                                                <span>The library cancelled this reservation. This will not affect your no-show count or booking eligibility.</span>
+                                            </div>
+                                        </div>
+                                    )}
+
+                                    {isExpanded && !isCancelledByAdmin && (
                                         <div className="p-4 bg-blue-50/70 border border-blue-200 rounded-xl text-center space-y-3 animate-in fade-in">
                                             <div className="bg-white p-3 rounded-xl border border-slate-200 inline-block">
                                                 <QrCode size={120} className="text-navy mx-auto" />
@@ -218,35 +245,47 @@ export default function MyReservations() {
                                     )}
 
                                     <div className="flex flex-wrap items-center justify-between gap-3 pt-2">
-                                        <Button
-                                            type="button"
-                                            variant="outline"
-                                            onClick={() => toggleQrPass(booking.id)}
-                                            className="h-9 text-xs font-bold rounded-xl"
-                                        >
-                                            <QrCode size={14} className="mr-1.5" />
-                                            {isExpanded ? 'Hide QR Pass' : 'View QR Pass'}
-                                        </Button>
-
-                                        {computedState === 'ACTIVE' && (
+                                        {isCancelledByAdmin ? (
                                             <Button
                                                 type="button"
-                                                onClick={() => handleRequestCheckout(booking)}
-                                                className="h-9 text-xs font-bold bg-amber-600 hover:bg-amber-700 text-white rounded-xl"
+                                                onClick={() => navigate('/student/find-seat')}
+                                                className="h-9 text-xs font-bold bg-brandBlue hover:bg-blue-600 text-white rounded-xl"
                                             >
-                                                <LogOut size={14} className="mr-1.5" /> Request Checkout QR
+                                                Find Another Slot <ArrowRight size={14} className="ml-1.5" />
                                             </Button>
-                                        )}
+                                        ) : (
+                                            <>
+                                                <Button
+                                                    type="button"
+                                                    variant="outline"
+                                                    onClick={() => toggleQrPass(booking.id)}
+                                                    className="h-9 text-xs font-bold rounded-xl"
+                                                >
+                                                    <QrCode size={14} className="mr-1.5" />
+                                                    {isExpanded ? 'Hide QR Pass' : 'View QR Pass'}
+                                                </Button>
 
-                                        {computedState === 'UPCOMING' && (
-                                            <Button
-                                                type="button"
-                                                variant="outline"
-                                                onClick={() => setCancelTarget(booking)}
-                                                className="h-9 text-xs font-bold border-red-200 text-red-600 hover:bg-red-50 rounded-xl"
-                                            >
-                                                Cancel Reservation
-                                            </Button>
+                                                {computedState === 'ACTIVE' && (
+                                                    <Button
+                                                        type="button"
+                                                        onClick={() => handleRequestCheckout(booking)}
+                                                        className="h-9 text-xs font-bold bg-amber-600 hover:bg-amber-700 text-white rounded-xl"
+                                                    >
+                                                        <LogOut size={14} className="mr-1.5" /> Request Checkout QR
+                                                    </Button>
+                                                )}
+
+                                                {computedState === 'UPCOMING' && (
+                                                    <Button
+                                                        type="button"
+                                                        variant="outline"
+                                                        onClick={() => setCancelTarget(booking)}
+                                                        className="h-9 text-xs font-bold border-red-200 text-red-600 hover:bg-red-50 rounded-xl"
+                                                    >
+                                                        Cancel Reservation
+                                                    </Button>
+                                                )}
+                                            </>
                                         )}
                                     </div>
                                 </CardContent>

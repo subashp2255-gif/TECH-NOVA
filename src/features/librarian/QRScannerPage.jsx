@@ -43,6 +43,16 @@ export default function QRScannerPage() {
         return;
       }
 
+      if (matched.status === 'CANCELLED_BY_ADMIN') {
+        setScanResult({
+          valid: false,
+          isCancelledByAdmin: true,
+          message: `Booking cancelled by library — This QR pass is no longer valid. (Reason: ${matched.cancellationReason || 'Library maintenance'})`
+        });
+        toast.error('Booking was cancelled by library administration.');
+        return;
+      }
+
       const isCheckout = cleanToken.includes('CKOUT') || matched.status === 'checkout_pending';
       setScanResult({
         valid: true,

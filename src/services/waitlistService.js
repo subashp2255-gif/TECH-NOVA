@@ -1,5 +1,6 @@
 import { db } from './mockDatabase';
 import { notificationService } from './notificationService';
+import { slotService } from './slotService';
 
 export const waitlistService = {
   async getStudentWaitlistEntries(studentId) {
@@ -18,6 +19,18 @@ export const waitlistService = {
   },
 
   async getWaitlistSummaryForSlot(dateStr, slotId, studentId = null) {
+    const disabledState = await slotService.getDisabledState(slotId, dateStr);
+    if (disabledState) {
+      return {
+        waitlistCount: 0,
+        isStudentWaiting: false,
+        studentPosition: 0,
+        studentEntry: null,
+        isDisabled: true,
+        disabledReason: disabledState.reason
+      };
+    }
+
     const list = (await db.read('seatsync_waitlist')) || [];
     const slotEntries = list.filter(w => 
       w.dateStr === dateStr &&
@@ -45,11 +58,17 @@ export const waitlistService = {
       waitlistCount,
       isStudentWaiting,
       studentPosition,
-      studentEntry
+      studentEntry,
+      isDisabled: false
     };
   },
 
   async joinWaitlist({ student, dateStr, slot, notificationPreference = 'In-App & System Notifications' }) {
+    const disabledState = await slotService.getDisabledState(slot.id, dateStr);
+    if (disabledState) {
+      throw new Error(`Cannot join waiting list. This slot is disabled due to: ${disabledState.reason}.`);
+    }
+
     const list = (await db.read('seatsync_waitlist')) || [];
 
     const existing = list.find(w =>
@@ -91,12 +110,15 @@ export const waitlistService = {
     const list = (await db.read('seatsync_waitlist')) || [];
     const idx = list.findIndex(w => w.id === entryId && w.studentId === studentId);
     if (idx !== -1) {
-      list[idx].status = 'CANCELLED';
+      list[idx].status = 'CANCELLED_BY_STUDENT';
       await db.write('seatsync_waitlist', list);
     }
   },
 
   async notifyNextStudent(dateStr, slotId) {
+    const disabledState = await slotService.getDisabledState(slotId, dateStr);
+    if (disabledState) return null;
+
     const list = (await db.read('seatsync_waitlist')) || [];
     const waiting = list
       .filter(w => w.dateStr === dateStr && w.slotId === slotId && (w.status || '').toLowerCase() === 'waiting')

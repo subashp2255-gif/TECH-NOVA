@@ -222,7 +222,10 @@ export default function FindSeat() {
           ) : (
             <div className="grid gap-3" style={{ gridTemplateColumns: 'repeat(auto-fill,minmax(min(100%,260px),1fr))' }}>
               {slots.map((slot, index) => {
-                const status = getSlotStatusInfo(slot.availableCount, slot.totalCount);
+                const isDisabled = slot.isDisabledByAdmin;
+                const status = isDisabled 
+                  ? { label: 'Cancelled by Library', badgeClass: 'bg-red-100 text-red-800 border-red-300 font-bold', isDisabled: true }
+                  : getSlotStatusInfo(slot.availableCount, slot.totalCount);
                 const isMorning = index < 4;
                 const summary = waitlistSummaries[slot.id] || {};
                 const isStudentWaiting = summary.isStudentWaiting;
@@ -231,6 +234,7 @@ export default function FindSeat() {
                   <Card
                     key={slot.id}
                     onClick={() => {
+                      if (isDisabled) return;
                       if (status.isFullyBooked) {
                         if (isStudentWaiting) handleViewWaitingList(null, slot);
                         else handleJoinWaitingList(null, slot);
@@ -238,10 +242,12 @@ export default function FindSeat() {
                         setSelectedSlot(slot);
                       }
                     }}
-                    className={`cursor-pointer transition-all border-2 rounded-xl p-3.5 ${
-                      status.isFullyBooked
-                        ? isStudentWaiting ? 'border-amber-400 bg-amber-50/20' : 'border-red-200 bg-slate-50/40'
-                        : 'border-slate-200 hover:border-brandBlue/50 hover:shadow-md bg-white'
+                    className={`transition-all border-2 rounded-xl p-3.5 ${
+                      isDisabled
+                        ? 'border-red-200 bg-red-50/20 cursor-not-allowed opacity-90'
+                        : status.isFullyBooked
+                        ? isStudentWaiting ? 'border-amber-400 bg-amber-50/20 cursor-pointer' : 'border-red-200 bg-slate-50/40 cursor-pointer'
+                        : 'border-slate-200 hover:border-brandBlue/50 hover:shadow-md bg-white cursor-pointer'
                     }`}
                   >
                     <CardContent className="p-0 space-y-3">
@@ -261,7 +267,16 @@ export default function FindSeat() {
                         </p>
                       </div>
 
-                      {isStudentWaiting && (
+                      {isDisabled ? (
+                        <div className="p-2 bg-red-100/60 border border-red-200 rounded-lg text-[10px] font-bold text-red-900 space-y-0.5">
+                          <p className="flex items-center gap-1 text-red-700">
+                            <AlertCircle size={12} className="shrink-0" /> This time slot is unavailable.
+                          </p>
+                          {slot.disabledReason && (
+                            <p className="text-[9.5px] font-medium text-slate-600">Reason: {slot.disabledReason}</p>
+                          )}
+                        </div>
+                      ) : isStudentWaiting ? (
                         <div className="bg-amber-50 border border-amber-200 rounded-lg p-2 flex items-center justify-between text-[10px]">
                           <span className="font-bold text-amber-950 flex items-center gap-1">
                             <Clock size={11} className="text-amber-600" /> Waitlisted
@@ -270,26 +285,35 @@ export default function FindSeat() {
                             #{summary.studentPosition}
                           </Badge>
                         </div>
+                      ) : (
+                        <div className="space-y-1">
+                          <div className="flex justify-between text-[10px] font-bold">
+                            <span className="text-slate-700">{slot.availableCount}/{slot.totalCount} seats</span>
+                            <span className="text-slate-500 font-mono">{status.percent}%</span>
+                          </div>
+                          <div className="w-full bg-slate-100 rounded-full h-1.5 overflow-hidden">
+                            <div className={`h-full rounded-full ${status.progressClass}`} style={{ width: `${status.percent}%` }} />
+                          </div>
+                        </div>
                       )}
-
-                      <div className="space-y-1">
-                        <div className="flex justify-between text-[10px] font-bold">
-                          <span className="text-slate-700">{slot.availableCount}/{slot.totalCount} seats</span>
-                          <span className="text-slate-500 font-mono">{status.percent}%</span>
-                        </div>
-                        <div className="w-full bg-slate-100 rounded-full h-1.5 overflow-hidden">
-                          <div className={`h-full rounded-full ${status.progressClass}`} style={{ width: `${status.percent}%` }} />
-                        </div>
-                      </div>
 
                       <Button
                         type="button"
-                        className="w-full h-8 text-[11px] font-bold rounded-lg mt-2"
-                        variant={status.isFullyBooked ? 'outline' : 'default'}
+                        disabled={isDisabled}
+                        variant={isDisabled ? "outline" : status.isFullyBooked ? (isStudentWaiting ? "secondary" : "outline") : "default"}
+                        className={`w-full h-9 text-xs font-bold rounded-lg ${
+                          isDisabled
+                            ? 'bg-slate-100 text-slate-400 border-slate-200 cursor-not-allowed'
+                            : status.isFullyBooked
+                            ? isStudentWaiting ? 'bg-amber-100 text-amber-900 border-amber-300' : 'border-red-300 text-red-700 hover:bg-red-50'
+                            : 'bg-brandBlue text-white'
+                        }`}
                       >
-                        {status.isFullyBooked
-                          ? isStudentWaiting ? 'View Waitlist Position' : 'Join Waiting List'
-                          : 'Select Slot →'}
+                        {isDisabled
+                          ? 'Slot Cancelled'
+                          : status.isFullyBooked
+                          ? isStudentWaiting ? 'View Waiting Status' : 'Join Waiting List'
+                          : 'Select Seat'}
                       </Button>
                     </CardContent>
                   </Card>

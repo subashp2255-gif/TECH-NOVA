@@ -1,4 +1,5 @@
 import { db } from './mockDatabase';
+import { slotService } from './slotService';
 import { format, addDays } from 'date-fns';
 
 export const bookingService = {
@@ -16,24 +17,36 @@ export const bookingService = {
     const slots = (await db.read('seatsync_slots')) || [];
     const seats = (await db.read('seatsync_seats')) || [];
     const bookings = (await db.read('seatsync_bookings')) || [];
+    const disabledList = await slotService.getDisabledOccurrences();
 
     const activeSeatsCount = seats.filter(s => s.status === 'active').length || 40;
 
     return slots.map(slot => {
+      const disabledRecord = disabledList.find(d => 
+        d.slotId === slot.id && 
+        (d.scope === 'ALL_FUTURE' || d.date === dateStr || (d.startDate <= dateStr && d.endDate >= dateStr))
+      );
+      const isDisabledByAdmin = !!disabledRecord;
+
       const slotBookings = bookings.filter(b => 
         b.bookingDate === dateStr &&
         b.slotId === slot.id &&
-        b.status !== 'cancelled'
+        b.status !== 'cancelled' &&
+        b.status !== 'CANCELLED_BY_STUDENT' &&
+        b.status !== 'CANCELLED_BY_ADMIN'
       );
       const bookedCount = slotBookings.length;
-      const availableCount = Math.max(0, activeSeatsCount - bookedCount);
+      const availableCount = isDisabledByAdmin ? 0 : Math.max(0, activeSeatsCount - bookedCount);
 
       return {
         ...slot,
         totalCount: activeSeatsCount,
         bookedCount,
         availableCount,
-        isFullyBooked: availableCount === 0
+        isFullyBooked: availableCount === 0,
+        isDisabledByAdmin,
+        disabledReason: disabledRecord ? disabledRecord.reason : null,
+        disabledScope: disabledRecord ? disabledRecord.scope : null
       };
     });
   },
@@ -45,7 +58,9 @@ export const bookingService = {
     const activeBookingsForSlot = bookings.filter(b =>
       b.bookingDate === dateStr &&
       b.slotId === slotId &&
-      b.status !== 'cancelled'
+      b.status !== 'cancelled' &&
+      b.status !== 'CANCELLED_BY_STUDENT' &&
+      b.status !== 'CANCELLED_BY_ADMIN'
     );
 
     const bookedSeatIds = new Set(activeBookingsForSlot.map(b => b.seatId));
@@ -68,6 +83,11 @@ export const bookingService = {
   },
 
   async createBooking(user, bookingDate, slot, floorId, seatId) {
+    const disabledState = await slotService.getDisabledState(slot.id, bookingDate);
+    if (disabledState) {
+      throw new Error(`This time slot is unavailable on ${bookingDate} due to: ${disabledState.reason}.`);
+    }
+
     const bookings = (await db.read('seatsync_bookings')) || [];
     const seats = (await db.read('seatsync_seats')) || [];
     const floors = (await db.read('seatsync_floors')) || [];
@@ -76,7 +96,9 @@ export const bookingService = {
       b.studentId === user.id &&
       b.bookingDate === bookingDate &&
       b.slotId === slot.id &&
-      b.status !== 'cancelled'
+      b.status !== 'cancelled' &&
+      b.status !== 'CANCELLED_BY_STUDENT' &&
+      b.status !== 'CANCELLED_BY_ADMIN'
     );
 
     if (existingUserBooking) {
@@ -110,7 +132,8 @@ export const bookingService = {
 
     // Record activity log
     const logs = (await db.read('seatsync_activity_logs')) || [];
-    logs.push({
+    logs.unshift({
+      id: `LOG-${Date.now()}`,
       userId: user.id,
       action: 'create_booking',
       entityId: newBooking.id,
@@ -131,7 +154,7 @@ export const bookingService = {
     const target = bookings.find(b => b.id === bookingId && b.studentId === studentId);
     if (!target) throw new Error('Booking not found.');
 
-    target.status = 'cancelled';
+    target.status = 'CANCELLED_BY_STUDENT';
     target.cancelledAt = new Date().toISOString();
     await db.write('seatsync_bookings', bookings);
 
