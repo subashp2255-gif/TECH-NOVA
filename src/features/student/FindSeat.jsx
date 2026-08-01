@@ -270,6 +270,13 @@ export default function FindSeat() {
             <div className="grid gap-3" style={{ gridTemplateColumns: 'repeat(auto-fill,minmax(min(100%,260px),1fr))' }}>
               {[1, 2, 3, 4].map(i => <div key={i} className="h-36 bg-white rounded-xl border border-slate-200 animate-pulse"></div>)}
             </div>
+          ) : slots.length === 0 ? (
+            <Card className="p-8 text-center bg-white border border-slate-200 rounded-2xl space-y-3">
+              <p className="text-xs text-slate-500 font-semibold">No operational time slots found for tomorrow.</p>
+              <Button onClick={fetchInitialData} className="bg-brandBlue text-white font-bold text-xs h-9 px-4 rounded-xl">
+                Reload Time Slots
+              </Button>
+            </Card>
           ) : (
             <div className="grid gap-3" style={{ gridTemplateColumns: 'repeat(auto-fill,minmax(min(100%,260px),1fr))' }}>
               {slots.map((slot, index) => {
