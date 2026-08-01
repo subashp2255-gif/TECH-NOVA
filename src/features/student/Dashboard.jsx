@@ -12,7 +12,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } f
 import { Link, useNavigate } from 'react-router-dom';
 import { format, formatDistanceToNow, parse, isAfter, isBefore } from 'date-fns';
 import {
-    Users, MapPin, Clock, Calendar, AlertTriangle, ListOrdered,
+    Users, MapPin, Clock, Calendar, AlertTriangle, AlertCircle, ListOrdered,
     ChevronRight, Activity, BookOpen, CheckCircle2, Bell, Sparkles,
     Search, BookmarkCheck, History, User, Info, ArrowRight, ShieldCheck, XCircle,
     Sliders, HelpCircle, Layers, LogOut, ArrowUpRight, QrCode, ChevronUp, Download,
@@ -449,11 +449,49 @@ export default function Dashboard() {
         );
     }
 
-    const getSlotAvailabilityStatus = (avail, total) => {
+    const getSlotAvailabilityStatus = (slot) => {
+        const slotStatus = String(slot.occurrenceStatus ?? slot.status ?? (slot.isDisabledByAdmin ? "DISABLED" : "ACTIVE")).toUpperCase();
+        const isSlotCancelled = slotStatus === "DISABLED" || slotStatus === "CANCELLED" || slot.isDisabledByAdmin === true || slot.isDisabled === true;
+
+        if (isSlotCancelled) {
+            return {
+                text: 'Cancelled',
+                percent: 0,
+                color: 'bg-slate-300',
+                badgeClass: 'bg-red-100 text-red-800 border-red-300 font-bold',
+                isSlotCancelled: true
+            };
+        }
+
+        const avail = Number(slot.availableCount || 0);
+        const total = Number(slot.totalCount || 40);
         const pct = Math.round((avail / total) * 100);
-        if (avail === 0) return { text: 'Full', percent: 0, color: 'bg-red-500' };
-        if (pct <= 25) return { text: 'Filling Fast', percent: pct, color: 'bg-amber-500' };
-        return { text: `${avail} Open`, percent: pct, color: 'bg-emerald-500' };
+
+        if (avail === 0) {
+            return {
+                text: 'Full',
+                percent: 0,
+                color: 'bg-red-500',
+                badgeClass: 'bg-red-100 text-red-800 border-red-300 font-bold',
+                isSlotCancelled: false
+            };
+        }
+        if (pct <= 25) {
+            return {
+                text: 'Filling Fast',
+                percent: pct,
+                color: 'bg-amber-500',
+                badgeClass: 'bg-amber-100 text-amber-800 border-amber-300 font-bold',
+                isSlotCancelled: false
+            };
+        }
+        return {
+            text: `${avail} Open`,
+            percent: pct,
+            color: 'bg-emerald-500',
+            badgeClass: 'bg-emerald-100 text-emerald-800 border-emerald-300 font-bold',
+            isSlotCancelled: false
+        };
     };
 
     return (
@@ -686,13 +724,21 @@ export default function Dashboard() {
 
                         <div className="grid gap-3" style={{ gridTemplateColumns: 'repeat(auto-fill,minmax(min(100%,240px),1fr))' }}>
                             {slotsAvailability.map(slot => {
-                                const status = getSlotAvailabilityStatus(slot.availableCount, slot.totalCount);
-                                const isFullyBooked = slot.isFullyBooked;
+                                const slotStatus = String(slot.occurrenceStatus ?? slot.status ?? (slot.isDisabledByAdmin ? "DISABLED" : "ACTIVE")).toUpperCase();
+                                const isSlotCancelled = slotStatus === "DISABLED" || slotStatus === "CANCELLED" || slot.isDisabledByAdmin === true || slot.isDisabled === true;
+                                const status = getSlotAvailabilityStatus(slot);
+                                const isFullyBooked = !isSlotCancelled && Number(slot.availableCount) === 0;
                                 const summary = waitlistSummaries[slot.id] || {};
-                                const isStudentWaiting = summary.isStudentWaiting;
+                                const isStudentWaiting = !isSlotCancelled && summary.isStudentWaiting;
 
                                 return (
-                                    <Card key={slot.id} className={`transition-all border-2 rounded-xl ${isFullyBooked ? isStudentWaiting ? 'border-amber-400/80 bg-amber-50/20' : 'border-red-200' : 'border-slate-200/90 hover:border-brandBlue/50 hover:shadow-md'}`}>
+                                    <Card key={slot.id} className={`transition-all border-2 rounded-xl ${
+                                        isSlotCancelled
+                                            ? 'border-red-200 bg-red-50/20 opacity-90'
+                                            : isFullyBooked
+                                            ? isStudentWaiting ? 'border-amber-400/80 bg-amber-50/20' : 'border-red-200'
+                                            : 'border-slate-200/90 hover:border-brandBlue/50 hover:shadow-md bg-white'
+                                    }`}>
                                         <CardContent className="p-3.5 space-y-2">
                                             <div className="flex justify-between items-start">
                                                 <div>
@@ -709,12 +755,21 @@ export default function Dashboard() {
                                                     <h3 className="text-sm font-bold text-navy">{slot.label}</h3>
                                                     <p className="text-[10px] text-slate-500 font-mono font-semibold">{slot.startTime} – {slot.endTime}</p>
                                                 </div>
-                                                <Badge className={`text-xs px-2.5 py-0.5 font-bold ${isFullyBooked ? 'bg-red-100 text-red-800 border-red-300' : 'bg-emerald-100 text-emerald-800 border-emerald-300'}`}>
-                                                    {status.text}
+                                                <Badge className={`text-xs px-2.5 py-0.5 font-bold ${isSlotCancelled ? 'bg-red-100 text-red-800 border-red-300' : isFullyBooked ? 'bg-red-100 text-red-800 border-red-300' : 'bg-emerald-100 text-emerald-800 border-emerald-300'}`}>
+                                                    {isSlotCancelled ? 'Cancelled' : status.text}
                                                 </Badge>
                                             </div>
 
-                                            {isStudentWaiting && (
+                                            {isSlotCancelled ? (
+                                                <div className="p-2 bg-red-100/60 border border-red-200 rounded-lg text-[10px] font-bold text-red-900 space-y-0.5">
+                                                    <p className="flex items-center gap-1 text-red-700">
+                                                        <AlertCircle size={12} className="shrink-0" /> This slot has been cancelled by the library.
+                                                    </p>
+                                                    {slot.disabledReason && (
+                                                        <p className="text-[9.5px] font-medium text-slate-600">Reason: {slot.disabledReason}</p>
+                                                    )}
+                                                </div>
+                                            ) : isStudentWaiting ? (
                                                 <div className="bg-amber-50 border border-amber-200/80 rounded-lg p-2 flex items-center justify-between text-[10px]">
                                                     <span className="font-bold text-amber-950 flex items-center gap-1">
                                                         <Clock size={11} className="text-amber-600" /> On waiting list
@@ -723,22 +778,31 @@ export default function Dashboard() {
                                                         #{summary.studentPosition}
                                                     </Badge>
                                                 </div>
+                                            ) : (
+                                                <div className="space-y-1">
+                                                    <div className="flex justify-between text-[10px] font-bold">
+                                                        <span className="text-slate-700">{slot.availableCount}/{slot.totalCount} seats</span>
+                                                        <span className="text-slate-500 font-mono">{status.percent}%</span>
+                                                    </div>
+                                                    <div className="w-full bg-slate-100 rounded-full h-1.5 overflow-hidden border border-slate-200/50">
+                                                        <div
+                                                            className={`h-full rounded-full transition-all duration-500 ${status.color}`}
+                                                            style={{ width: `${status.percent}%` }}
+                                                        />
+                                                    </div>
+                                                </div>
                                             )}
 
-                                            <div className="space-y-1">
-                                                <div className="flex justify-between text-[10px] font-bold">
-                                                    <span className="text-slate-700">{slot.availableCount}/{slot.totalCount} seats</span>
-                                                    <span className="text-slate-500 font-mono">{status.percent}%</span>
-                                                </div>
-                                                <div className="w-full bg-slate-100 rounded-full h-1.5 overflow-hidden border border-slate-200/50">
-                                                    <div
-                                                        className={`h-full rounded-full transition-all duration-500 ${status.color}`}
-                                                        style={{ width: `${status.percent}%` }}
-                                                    />
-                                                </div>
-                                            </div>
-
-                                            {isFullyBooked ? (
+                                            {isSlotCancelled ? (
+                                                <Button
+                                                    type="button"
+                                                    disabled
+                                                    aria-disabled="true"
+                                                    className="w-full h-8 text-[11px] font-bold bg-slate-100 text-slate-400 border border-slate-200 rounded-lg cursor-not-allowed"
+                                                >
+                                                    Slot Cancelled
+                                                </Button>
+                                            ) : isFullyBooked ? (
                                                 isStudentWaiting ? (
                                                     <Button
                                                         type="button"
@@ -764,9 +828,9 @@ export default function Dashboard() {
                                                         e.stopPropagation();
                                                         navigate('/student/find-seat');
                                                     }}
-                                                    className="w-full h-8 text-[11px] font-bold bg-navy hover:bg-blue-900 text-white rounded-lg shadow-xs"
+                                                    className="w-full h-8 text-[11px] font-bold bg-brandBlue hover:bg-blue-700 active:bg-blue-800 text-white flex items-center justify-center gap-1.5 rounded-lg shadow-xs relative z-10 cursor-pointer pointer-events-auto"
                                                 >
-                                                    Book Now <ArrowRight size={12} className="ml-1" />
+                                                    Select Seat <ArrowRight size={12} />
                                                 </Button>
                                             )}
                                         </CardContent>

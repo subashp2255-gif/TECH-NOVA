@@ -144,33 +144,56 @@ export default function FindSeat() {
     return seats.filter(s => s.zoneId === selectedZone);
   }, [seats, selectedZone]);
 
-  const getSlotStatusInfo = (available, total) => {
+  const getSlotStatusInfo = (slot) => {
+    const slotStatus = String(slot.occurrenceStatus ?? slot.status ?? (slot.isDisabledByAdmin ? "DISABLED" : "ACTIVE")).toUpperCase();
+    const isSlotCancelled = slotStatus === "DISABLED" || slotStatus === "CANCELLED" || slot.isDisabledByAdmin === true || slot.isDisabled === true;
+
+    if (isSlotCancelled) {
+      return {
+        label: 'Cancelled by Library',
+        badgeClass: 'bg-red-100 text-red-800 border-red-300 font-bold',
+        progressClass: 'bg-slate-300',
+        percent: 0,
+        isSlotCancelled: true,
+        isDisabled: true,
+        isFullyBooked: false
+      };
+    }
+
+    const available = Number(slot.availableCount || 0);
+    const total = Number(slot.totalCount || 40);
     const pct = Math.round((available / total) * 100);
+
     if (available === 0) {
       return {
         label: 'Fully Booked',
         badgeClass: 'bg-red-100 text-red-800 border-red-300 font-bold',
         progressClass: 'bg-red-500',
         percent: 0,
+        isSlotCancelled: false,
         isDisabled: false,
         isFullyBooked: true
       };
     }
+
     if (pct <= 25) {
       return {
         label: `${available} Seats Left`,
         badgeClass: 'bg-amber-100 text-amber-800 border-amber-300 font-bold',
         progressClass: 'bg-amber-500',
         percent: pct,
+        isSlotCancelled: false,
         isDisabled: false,
         isFullyBooked: false
       };
     }
+
     return {
       label: `${available} Available`,
       badgeClass: 'bg-emerald-100 text-emerald-800 border-emerald-300 font-bold',
       progressClass: 'bg-emerald-500',
       percent: pct,
+      isSlotCancelled: false,
       isDisabled: false,
       isFullyBooked: false
     };
@@ -222,20 +245,20 @@ export default function FindSeat() {
           ) : (
             <div className="grid gap-3" style={{ gridTemplateColumns: 'repeat(auto-fill,minmax(min(100%,260px),1fr))' }}>
               {slots.map((slot, index) => {
-                const isDisabled = slot.isDisabledByAdmin;
-                const status = isDisabled 
-                  ? { label: 'Cancelled by Library', badgeClass: 'bg-red-100 text-red-800 border-red-300 font-bold', isDisabled: true }
-                  : getSlotStatusInfo(slot.availableCount, slot.totalCount);
-                const isMorning = index < 4;
+                const slotStatus = String(slot.occurrenceStatus ?? slot.status ?? (slot.isDisabledByAdmin ? "DISABLED" : "ACTIVE")).toUpperCase();
+                const isSlotCancelled = slotStatus === "DISABLED" || slotStatus === "CANCELLED" || slot.isDisabledByAdmin === true || slot.isDisabled === true;
+                const status = getSlotStatusInfo(slot);
+                const isFullyBooked = !isSlotCancelled && Number(slot.availableCount) === 0;
                 const summary = waitlistSummaries[slot.id] || {};
-                const isStudentWaiting = summary.isStudentWaiting;
+                const isStudentWaiting = !isSlotCancelled && summary.isStudentWaiting;
+                const isMorning = index < 4;
 
                 return (
                   <Card
                     key={slot.id}
                     onClick={() => {
-                      if (isDisabled) return;
-                      if (status.isFullyBooked) {
+                      if (isSlotCancelled) return;
+                      if (isFullyBooked) {
                         if (isStudentWaiting) handleViewWaitingList(null, slot);
                         else handleJoinWaitingList(null, slot);
                       } else {
@@ -243,9 +266,9 @@ export default function FindSeat() {
                       }
                     }}
                     className={`transition-all border-2 rounded-xl p-3.5 ${
-                      isDisabled
+                      isSlotCancelled
                         ? 'border-red-200 bg-red-50/20 cursor-not-allowed opacity-90'
-                        : status.isFullyBooked
+                        : isFullyBooked
                         ? isStudentWaiting ? 'border-amber-400 bg-amber-50/20 cursor-pointer' : 'border-red-200 bg-slate-50/40 cursor-pointer'
                         : 'border-slate-200 hover:border-brandBlue/50 hover:shadow-md bg-white cursor-pointer'
                     }`}
@@ -256,7 +279,7 @@ export default function FindSeat() {
                           {isMorning ? 'Morning' : 'Afternoon'}
                         </Badge>
                         <Badge variant="outline" className={`text-[10px] ${status.badgeClass}`}>
-                          {status.label}
+                          {isSlotCancelled ? 'Cancelled by Library' : status.label}
                         </Badge>
                       </div>
 
@@ -267,10 +290,10 @@ export default function FindSeat() {
                         </p>
                       </div>
 
-                      {isDisabled ? (
+                      {isSlotCancelled ? (
                         <div className="p-2 bg-red-100/60 border border-red-200 rounded-lg text-[10px] font-bold text-red-900 space-y-0.5">
                           <p className="flex items-center gap-1 text-red-700">
-                            <AlertCircle size={12} className="shrink-0" /> This time slot is unavailable.
+                            <AlertCircle size={12} className="shrink-0" /> This slot has been cancelled by the library.
                           </p>
                           {slot.disabledReason && (
                             <p className="text-[9.5px] font-medium text-slate-600">Reason: {slot.disabledReason}</p>
@@ -299,19 +322,20 @@ export default function FindSeat() {
 
                       <Button
                         type="button"
-                        disabled={isDisabled}
-                        variant={isDisabled ? "outline" : status.isFullyBooked ? (isStudentWaiting ? "secondary" : "outline") : "default"}
+                        disabled={isSlotCancelled}
+                        aria-disabled={isSlotCancelled}
+                        variant={isSlotCancelled ? "outline" : isFullyBooked ? (isStudentWaiting ? "secondary" : "outline") : "default"}
                         className={`w-full h-9 text-xs font-bold rounded-lg ${
-                          isDisabled
+                          isSlotCancelled
                             ? 'bg-slate-100 text-slate-400 border-slate-200 cursor-not-allowed'
-                            : status.isFullyBooked
+                            : isFullyBooked
                             ? isStudentWaiting ? 'bg-amber-100 text-amber-900 border-amber-300' : 'border-red-300 text-red-700 hover:bg-red-50'
                             : 'bg-brandBlue text-white'
                         }`}
                       >
-                        {isDisabled
+                        {isSlotCancelled
                           ? 'Slot Cancelled'
-                          : status.isFullyBooked
+                          : isFullyBooked
                           ? isStudentWaiting ? 'View Waiting Status' : 'Join Waiting List'
                           : 'Select Seat'}
                       </Button>

@@ -65,8 +65,11 @@ export const waitlistService = {
 
   async joinWaitlist({ student, dateStr, slot, notificationPreference = 'In-App & System Notifications' }) {
     const disabledState = await slotService.getDisabledState(slot.id, dateStr);
-    if (disabledState) {
-      throw new Error(`Cannot join waiting list. This slot is disabled due to: ${disabledState.reason}.`);
+    const slotStatus = String(slot.occurrenceStatus ?? slot.status ?? (disabledState ? "DISABLED" : "ACTIVE")).toUpperCase();
+    if (disabledState || ["DISABLED", "CANCELLED"].includes(slotStatus) || slot.isDisabledByAdmin) {
+      throw new Error(
+        "This slot was cancelled by the library and its waiting list is closed."
+      );
     }
 
     const list = (await db.read('seatsync_waitlist')) || [];
