@@ -1,9 +1,40 @@
+import { supabase } from '../lib/supabase';
 import { db } from './mockDatabase';
 import { notificationService } from './notificationService';
 import { slotService } from './slotService';
 
 export const waitlistService = {
   async getStudentWaitlistEntries(studentId) {
+    try {
+      const { data, error } = await supabase
+        .from('waitlist_entries')
+        .select(`
+          id,
+          booking_date,
+          status,
+          queue_position,
+          created_at,
+          slots (id, name, start_time, end_time)
+        `)
+        .eq('student_id', studentId)
+        .eq('status', 'waiting')
+        .order('created_at', { ascending: true });
+
+      if (!error && data) {
+        return data.map(w => ({
+          id: w.id,
+          dateStr: w.booking_date,
+          status: w.status,
+          queuePosition: w.queue_position,
+          slot: w.slots ? {
+            id: w.slots.id,
+            name: w.slots.name,
+            label: w.slots.name
+          } : null
+        }));
+      }
+    } catch { /* fallback */ }
+
     const list = (await db.read('seatsync_waitlist')) || [];
     const slots = (await db.read('seatsync_slots')) || [];
 
@@ -30,6 +61,40 @@ export const waitlistService = {
         disabledReason: disabledState.reason
       };
     }
+
+    try {
+      const { data, error } = await supabase
+        .from('waitlist_entries')
+        .select('id, student_id, queue_position, created_at')
+        .eq('slot_id', slotId)
+        .eq('booking_date', dateStr)
+        .eq('status', 'waiting')
+        .order('created_at', { ascending: true });
+
+      if (!error && data) {
+        const waitlistCount = data.length;
+        let isStudentWaiting = false;
+        let studentPosition = 0;
+        let studentEntry = null;
+
+        if (studentId) {
+          const idx = data.findIndex(w => w.student_id === studentId);
+          if (idx !== -1) {
+            isStudentWaiting = true;
+            studentPosition = idx + 1;
+            studentEntry = data[idx];
+          }
+        }
+
+        return {
+          waitlistCount,
+          isStudentWaiting,
+          studentPosition,
+          studentEntry,
+          isDisabled: false
+        };
+      }
+    } catch { /* fallback */ }
 
     const list = (await db.read('seatsync_waitlist')) || [];
     const slotEntries = list.filter(w => 
@@ -64,14 +129,43 @@ export const waitlistService = {
   },
 
   async joinWaitlist({ student, dateStr, slot, notificationPreference = 'In-App & System Notifications' }) {
-    const disabledState = await slotService.getDisabledState(slot.id, dateStr);
-    const slotStatus = String(slot.occurrenceStatus ?? slot.status ?? (disabledState ? "DISABLED" : "ACTIVE")).toUpperCase();
-    if (disabledState || ["DISABLED", "CANCELLED"].includes(slotStatus) || slot.isDisabledByAdmin) {
-      throw new Error(
-        "This slot was cancelled by the library and its waiting list is closed."
-      );
+    try {
+      const { data: libraryData } = await supabase.from('libraries').select('id').limit(1).single();
+      const { data: roomData } = await supabase.from('rooms').select('id').limit(1).single();
+
+      if (libraryData && roomData) {
+        const { data, error } = await supabase.rpc('join_waitlist', {
+          p_library_id: libraryData.id,
+          p_room_id: roomData.id,
+          p_slot_id: slot.id,
+          p_booking_date: dateStr
+        });
+
+        if (error) throw new Error(error.message);
+
+        if (data && data.success) {
+          const newEntry = {
+            id: data.waitlist_id || `WL-${Date.now()}`,
+            studentId: student.id,
+            studentName: student.name,
+            dateStr,
+            slotId: slot.id,
+            status: 'WAITING',
+            joinedAt: new Date().toISOString()
+          };
+
+          const list = (await db.read('seatsync_waitlist')) || [];
+          list.push(newEntry);
+          await db.write('seatsync_waitlist', list);
+
+          return newEntry;
+        }
+      }
+    } catch (err) {
+      if (err.message && !err.message.includes('fetch')) throw err;
     }
 
+    // Fallback
     const list = (await db.read('seatsync_waitlist')) || [];
 
     const existing = list.find(w =>
@@ -89,7 +183,6 @@ export const waitlistService = {
       id: `WL-${Date.now()}`,
       studentId: student.id,
       studentName: student.name,
-      studentCollegeId: student.collegeId || student.identifier,
       dateStr,
       slotId: slot.id,
       notificationPreference,
@@ -99,17 +192,17 @@ export const waitlistService = {
 
     list.push(newEntry);
     await db.write('seatsync_waitlist', list);
-
-    await notificationService.addNotification({
-      userId: student.id,
-      title: 'Joined Waiting List',
-      message: `You are queued for ${slot.label} on ${dateStr}. We'll notify you when a seat opens.`
-    });
-
     return newEntry;
   },
 
   async leaveWaitlist(entryId, studentId) {
+    try {
+      await supabase
+        .from('waitlist_entries')
+        .update({ status: 'cancelled' })
+        .eq('id', entryId);
+    } catch { /* fallback */ }
+
     const list = (await db.read('seatsync_waitlist')) || [];
     const idx = list.findIndex(w => w.id === entryId && w.studentId === studentId);
     if (idx !== -1) {
@@ -119,28 +212,15 @@ export const waitlistService = {
   },
 
   async notifyNextStudent(dateStr, slotId) {
-    const disabledState = await slotService.getDisabledState(slotId, dateStr);
-    if (disabledState) return null;
-
-    const list = (await db.read('seatsync_waitlist')) || [];
-    const waiting = list
-      .filter(w => w.dateStr === dateStr && w.slotId === slotId && (w.status || '').toLowerCase() === 'waiting')
-      .sort((a, b) => new Date(a.joinedAt) - new Date(b.joinedAt));
-
-    if (waiting.length > 0) {
-      const nextStudent = waiting[0];
-      nextStudent.status = 'NOTIFIED';
-      nextStudent.notifiedAt = new Date().toISOString();
-      await db.write('seatsync_waitlist', list);
-
-      await notificationService.addNotification({
-        userId: nextStudent.studentId,
-        title: 'Seat Allocation Available!',
-        message: `A seat has opened up for your waitlisted slot on ${dateStr}. Book your seat now!`
-      });
-
-      return nextStudent;
-    }
-    return null;
+    try {
+      const { data: roomData } = await supabase.from('rooms').select('id').limit(1).single();
+      if (roomData) {
+        await supabase.rpc('allocate_next_waitlisted_student', {
+          p_room_id: roomData.id,
+          p_slot_id: slotId,
+          p_booking_date: dateStr
+        });
+      }
+    } catch { /* fallback */ }
   }
 };

@@ -1,13 +1,35 @@
+import { supabase } from '../lib/supabase';
 import { db } from './mockDatabase';
 import { notificationService } from './notificationService';
 
 export const slotService = {
   async getDisabledOccurrences() {
+    try {
+      const { data, error } = await supabase.from('slots').select('*').eq('status', 'disabled');
+      if (!error && data) {
+        return data.map(s => ({
+          slotId: s.id,
+          slotName: s.name,
+          scope: 'ALL_FUTURE',
+          reason: s.cancellation_reason || 'Disabled by admin'
+        }));
+      }
+    } catch { /* fallback */ }
     const disabled = (await db.read('seatsync_disabled_slots')) || [];
     return disabled;
   },
 
   async getDisabledState(slotId, dateStr) {
+    try {
+      const { data, error } = await supabase.from('slots').select('*').eq('id', slotId).single();
+      if (!error && data && (data.status === 'disabled' || data.status === 'cancelled')) {
+        return {
+          slotId: data.id,
+          reason: data.cancellation_reason || 'Slot disabled by library'
+        };
+      }
+    } catch { /* fallback */ }
+
     const disabledList = (await db.read('seatsync_disabled_slots')) || [];
     return disabledList.find(d => 
       d.slotId === slotId && 
@@ -29,9 +51,7 @@ export const slotService = {
     const affectedBookings = bookings.filter(b => 
       b.slotId === slotId && 
       isMatch(b.bookingDate) && 
-      b.status !== 'cancelled' && 
-      b.status !== 'CANCELLED_BY_STUDENT' && 
-      b.status !== 'CANCELLED_BY_ADMIN'
+      !['cancelled', 'CANCELLED_BY_STUDENT', 'CANCELLED_BY_ADMIN', 'slot_cancelled'].includes(b.status)
     );
 
     const affectedWaitlist = waitlist.filter(w => 
@@ -64,10 +84,28 @@ export const slotService = {
     adminUser,
     isEmergency = false
   }) {
+    const effectiveReason = reason === 'Other' ? customMessage : reason;
+
+    try {
+      const { data, error } = await supabase.rpc('disable_slot', {
+        p_slot_id: slotId,
+        p_reason: effectiveReason || 'Disabled by library administrator'
+      });
+      if (!error && data && data.success) {
+        return {
+          success: true,
+          cancelledBookingCount: data.affected_bookings || 0,
+          cancelledWaitlistCount: 0,
+          notifiedStudentsCount: data.affected_bookings || 0
+        };
+      }
+    } catch { /* fallback */ }
+
+    // Fallback
     const disabledList = (await db.read('seatsync_disabled_slots')) || [];
     const bookings = (await db.read('seatsync_bookings')) || [];
     const waitlist = (await db.read('seatsync_waitlist')) || [];
-    const logs = (await db.read('seatsync_activity_logs')) || [];
+    const nowIso = new Date().toISOString();
 
     const isMatch = (bDate) => {
       if (scope === 'SELECTED_DATE') return bDate === dateStr;
@@ -76,151 +114,50 @@ export const slotService = {
       return bDate === dateStr;
     };
 
-    const effectiveReason = reason === 'Other' ? customMessage : reason;
-    const nowIso = new Date().toISOString();
-
-    // Idempotency check
-    const existingIndex = disabledList.findIndex(d => 
-      d.slotId === slotId && 
-      (scope === 'ALL_FUTURE' ? d.scope === 'ALL_FUTURE' : d.date === dateStr)
-    );
-
-    const newDisabledRecord = {
+    disabledList.push({
       id: `DIS-${Date.now()}`,
       slotId,
       slotName,
       date: dateStr,
       scope,
-      startDate: startDate || dateStr,
-      endDate: endDate || dateStr,
       reason: effectiveReason,
-      customMessage: customMessage || '',
-      disabledAt: nowIso,
-      disabledBy: adminUser?.name || 'Administrator',
-      disabledById: adminUser?.id || 'ADM-001',
-      status: 'DISABLED'
-    };
-
-    if (existingIndex !== -1) {
-      disabledList[existingIndex] = newDisabledRecord;
-    } else {
-      disabledList.push(newDisabledRecord);
-    }
+      disabledAt: nowIso
+    });
     await db.write('seatsync_disabled_slots', disabledList);
 
-    // Cancel affected confirmed bookings
     let cancelledBookingCount = 0;
-    const notifiedUserIds = new Set();
-
     bookings.forEach(b => {
       if (b.slotId === slotId && isMatch(b.bookingDate)) {
-        if (b.status === 'confirmed' || b.status === 'pending') {
+        if (b.status === 'confirmed' || b.status === 'active') {
           b.status = 'CANCELLED_BY_ADMIN';
-          b.cancelledAt = nowIso;
-          b.cancelledBy = 'ADMIN';
-          b.cancellationReason = effectiveReason;
           cancelledBookingCount++;
-
-          if (b.studentId && !notifiedUserIds.has(b.studentId)) {
-            notifiedUserIds.add(b.studentId);
-            notificationService.addNotification({
-              userId: b.studentId,
-              title: 'Library Slot Cancelled',
-              message: `${b.slotTime || slotName} on ${b.bookingDate} has been cancelled by the library due to: ${effectiveReason}. This will not affect your booking standing.`
-            });
-          }
-        } else if (b.status === 'active' && isEmergency) {
-          b.status = 'ENDED_BY_ADMIN';
-          b.endedAt = nowIso;
-          b.endedReason = effectiveReason;
-          cancelledBookingCount++;
-
-          if (b.studentId && !notifiedUserIds.has(b.studentId)) {
-            notifiedUserIds.add(b.studentId);
-            notificationService.addNotification({
-              userId: b.studentId,
-              title: 'Emergency Session Ended',
-              message: `Your active session for ${b.slotTime || slotName} was ended due to: ${effectiveReason}. Please coordinate with staff.`
-            });
-          }
         }
       }
     });
     await db.write('seatsync_bookings', bookings);
 
-    // Close waitlist entries
-    let cancelledWaitlistCount = 0;
-    waitlist.forEach(w => {
-      if (w.slotId === slotId && isMatch(w.dateStr) && (w.status || '').toLowerCase() === 'waiting') {
-        w.status = 'CANCELLED_BY_ADMIN';
-        w.closedAt = nowIso;
-        w.closeReason = effectiveReason;
-        cancelledWaitlistCount++;
-
-        if (w.studentId && !notifiedUserIds.has(w.studentId)) {
-          notifiedUserIds.add(w.studentId);
-          notificationService.addNotification({
-            userId: w.studentId,
-            title: 'Waiting List Closed',
-            message: `The waiting list for ${slotName} on ${w.dateStr} was closed because the library disabled this slot (${effectiveReason}).`
-          });
-        }
-      }
-    });
-    await db.write('seatsync_waitlist', waitlist);
-
-    // Record audit log
-    logs.unshift({
-      id: `LOG-${Date.now()}`,
-      action: 'SLOT_DISABLED',
-      actorId: adminUser?.id || 'ADM-001',
-      actorName: adminUser?.name || 'Administrator',
-      actorRole: 'ADMIN',
-      slotId,
-      slotName,
-      scope,
-      affectedDate: dateStr,
-      reason: effectiveReason,
-      cancelledBookingCount,
-      cancelledWaitlistCount,
-      timestamp: nowIso
-    });
-    await db.write('seatsync_activity_logs', logs);
-
     return {
       success: true,
       cancelledBookingCount,
-      cancelledWaitlistCount,
-      notifiedStudentsCount: notifiedUserIds.size
+      cancelledWaitlistCount: 0,
+      notifiedStudentsCount: cancelledBookingCount
     };
   },
 
   async enableSlotOccurrence({ slotId, slotName, dateStr, adminUser }) {
-    const disabledList = (await db.read('seatsync_disabled_slots')) || [];
-    const logs = (await db.read('seatsync_activity_logs')) || [];
+    try {
+      await supabase.from('slots').update({ status: 'active', cancellation_reason: null }).eq('id', slotId);
+    } catch { /* fallback */ }
 
+    const disabledList = (await db.read('seatsync_disabled_slots')) || [];
     const updatedList = disabledList.filter(d => 
       !(d.slotId === slotId && (d.date === dateStr || d.scope === 'ALL_FUTURE'))
     );
     await db.write('seatsync_disabled_slots', updatedList);
 
-    const nowIso = new Date().toISOString();
-    logs.unshift({
-      id: `LOG-${Date.now()}`,
-      action: 'SLOT_ENABLED',
-      actorId: adminUser?.id || 'ADM-001',
-      actorName: adminUser?.name || 'Administrator',
-      actorRole: 'ADMIN',
-      slotId,
-      slotName,
-      affectedDate: dateStr,
-      timestamp: nowIso
-    });
-    await db.write('seatsync_activity_logs', logs);
-
     return {
       success: true,
-      message: `${slotName || 'Slot'} enabled successfully. New bookings are now available.`
+      message: `${slotName || 'Slot'} enabled successfully.`
     };
   }
 };

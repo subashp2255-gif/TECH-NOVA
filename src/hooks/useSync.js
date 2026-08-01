@@ -1,44 +1,62 @@
 import { useEffect, useRef } from 'react';
+import { supabase } from '../lib/supabase';
 
-export function useSync(onSync) {
-  const callbackRef = useRef(onSync);
-  callbackRef.current = onSync;
+/**
+ * Enhanced useSync hook that subscribes to Supabase Realtime postgres_changes
+ * while remaining backwards compatible with local broadcast events.
+ */
+export function useSync(tablesOrCallback, onSyncCallback) {
+  let tables = [];
+  let callback = null;
+
+  if (Array.isArray(tablesOrCallback)) {
+    tables = tablesOrCallback.map(t => t.replace('seatsync_', ''));
+    callback = onSyncCallback;
+  } else if (typeof tablesOrCallback === 'function') {
+    callback = tablesOrCallback;
+    tables = ['bookings', 'profiles', 'seats', 'rooms', 'slots', 'waitlist_entries', 'notifications', 'seat_maintenance'];
+  }
+
+  const callbackRef = useRef(callback);
+  callbackRef.current = callback;
 
   useEffect(() => {
-    let bc = null;
-    try {
-      bc = new BroadcastChannel('seatsync_channel');
-      bc.onmessage = (event) => {
-        if (callbackRef.current) {
-          callbackRef.current(event.data);
+    if (!tables || tables.length === 0) return;
+
+    const channelName = `seatsync-realtime-${Math.random().toString(36).substring(2, 7)}`;
+    const channel = supabase.channel(channelName);
+
+    tables.forEach(t => {
+      // Map mock names if any
+      const tableName = t === 'users' ? 'profiles' : t === 'checkins' ? 'check_in_logs' : t;
+      channel.on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: tableName },
+        (payload) => {
+          if (callbackRef.current) {
+            callbackRef.current({
+              type: 'realtime_change',
+              table: tableName,
+              payload
+            });
+          }
         }
-      };
-    } catch { /* BroadcastChannel not supported */ }
+      );
+    });
 
-    const handleStorageEvent = (event) => {
-      if (callbackRef.current && event.key && event.key.startsWith('seatsync_')) {
-        callbackRef.current({
-          type: 'storage_change',
-          key: event.key,
-          newValue: event.newValue
-        });
-      }
-    };
-
-    window.addEventListener('storage', handleStorageEvent);
+    channel.subscribe();
 
     return () => {
-      window.removeEventListener('storage', handleStorageEvent);
-      if (bc) bc.close();
+      supabase.removeChannel(channel);
     };
-  }, []);
+  }, [tables.join(',')]);
 
   const broadcast = (data) => {
     try {
       const bc = new BroadcastChannel('seatsync_channel');
       bc.postMessage(data);
       bc.close();
-    } catch { /* ignore */ }
+    } catch { /* fallback */ }
   };
 
   return { broadcast };
