@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { authService } from '../services/authService';
+import { authService, parseErrorMessage } from '../services/authService';
 import { Card } from '../components/shared/Card';
 import { Button } from '../components/shared/Button';
 import PasswordField from '../components/auth/PasswordField';
@@ -27,7 +27,8 @@ export default function ResetPasswordPage() {
       toast.success('Password updated successfully! Please sign in with your new password.');
       navigate('/login', { replace: true });
     } catch (err) {
-      setErrorMsg(err.message || 'Failed to update password. Token may have expired.');
+      const msg = parseErrorMessage(err, 'Failed to update password. Token may have expired.');
+      setErrorMsg(msg);
     } finally {
       setLoading(false);
     }

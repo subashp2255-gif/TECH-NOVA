@@ -2,6 +2,30 @@ import { supabase } from '../lib/supabase';
 import { db } from './mockDatabase';
 import { ROLES, defaultUsers } from '../data/seedData';
 
+export function parseErrorMessage(err, fallbackMsg = 'An unexpected error occurred. Please try again.') {
+  if (!err) return fallbackMsg;
+  if (typeof err === 'string') {
+    const trimmed = err.trim();
+    if (trimmed && trimmed !== '{}' && trimmed !== '[object Object]') return trimmed;
+    return fallbackMsg;
+  }
+  if (err instanceof Error && err.message) {
+    if (typeof err.message === 'string') {
+      const trimmed = err.message.trim();
+      if (trimmed && trimmed !== '{}' && trimmed !== '[object Object]') return trimmed;
+    }
+  }
+  if (typeof err === 'object') {
+    if (err.message && typeof err.message === 'string') {
+      const trimmed = err.message.trim();
+      if (trimmed && trimmed !== '{}' && trimmed !== '[object Object]') return trimmed;
+    }
+    if (err.error_description && typeof err.error_description === 'string') return err.error_description;
+    if (err.msg && typeof err.msg === 'string') return err.msg;
+  }
+  return fallbackMsg;
+}
+
 export const authService = {
   getCurrentUser() {
     try {
@@ -11,6 +35,47 @@ export const authService = {
     } catch {
       return null;
     }
+  },
+
+  async _saveToLocalUser({ fullName, registrationNumber, department, yearOfStudy, email, password }) {
+    let users = await db.read('seatsync_users');
+    if (!users || !Array.isArray(users) || users.length === 0) {
+      users = [...defaultUsers];
+    }
+    const cleanEmail = email.trim().toLowerCase();
+    const cleanRegNo = registrationNumber.trim();
+
+    // Check if duplicate user
+    const existing = users.find(u => 
+      (u.email && u.email.toLowerCase() === cleanEmail) || 
+      (u.collegeId && u.collegeId.toLowerCase() === cleanRegNo.toLowerCase()) ||
+      (u.registration_number && u.registration_number.toLowerCase() === cleanRegNo.toLowerCase()) ||
+      (u.identifier && u.identifier.toLowerCase() === cleanEmail)
+    );
+
+    if (existing) {
+      throw new Error('An account with this email or registration number already exists.');
+    }
+
+    const newUser = {
+      id: `std_${Date.now()}`,
+      name: fullName,
+      fullName: fullName,
+      email: cleanEmail,
+      collegeId: cleanRegNo,
+      registration_number: cleanRegNo,
+      identifier: cleanEmail,
+      department,
+      yearOfStudy: Number(yearOfStudy),
+      role: ROLES.STUDENT,
+      status: 'ACTIVE',
+      password: password,
+      noShowCount: 0
+    };
+
+    users.push(newUser);
+    await db.write('seatsync_users', users);
+    return newUser;
   },
 
   async login(identifier, password, rememberMe = true) {
@@ -55,7 +120,7 @@ export const authService = {
         password: cleanPass
       });
 
-      if (!authError && authData.user) {
+      if (!authError && authData?.user) {
         authSucceeded = true;
         authUser = authData.user;
       }
@@ -128,7 +193,7 @@ export const authService = {
 
     // 4. Fallback check against seed/mock database users
     let users = await db.read('seatsync_users');
-    if (!users || users.length === 0) {
+    if (!users || !Array.isArray(users) || users.length === 0) {
       users = defaultUsers;
       await db.write('seatsync_users', defaultUsers);
     }
@@ -137,6 +202,7 @@ export const authService = {
       const matchId = (
         (u.identifier && String(u.identifier).toLowerCase() === cleanId.toLowerCase()) ||
         (u.collegeId && String(u.collegeId).toLowerCase() === cleanId.toLowerCase()) ||
+        (u.registration_number && String(u.registration_number).toLowerCase() === cleanId.toLowerCase()) ||
         (u.staffId && String(u.staffId).toLowerCase() === cleanId.toLowerCase()) ||
         (u.adminId && String(u.adminId).toLowerCase() === cleanId.toLowerCase()) ||
         (u.email && String(u.email).toLowerCase() === cleanId.toLowerCase()) ||
@@ -187,38 +253,64 @@ export const authService = {
     const cleanEmail = email.trim().toLowerCase();
     const cleanRegNo = registrationNumber.trim();
 
-    const { data: authData, error: authError } = await supabase.auth.signUp({
-      email: cleanEmail,
-      password,
-      options: {
-        data: {
-          full_name: fullName,
-          registration_number: cleanRegNo,
-          department,
-          year_of_study: yearOfStudy
-        }
-      }
-    });
+    if (!fullName || !fullName.trim()) throw new Error('Full Name is required.');
+    if (!cleanRegNo) throw new Error('Registration Number is required.');
+    if (!cleanEmail || !cleanEmail.includes('@')) throw new Error('Valid college email is required.');
+    if (!password || password.length < 6) throw new Error('Password must be at least 6 characters.');
 
-    if (authError) {
-      throw new Error(authError.message || 'Student registration failed.');
-    }
-
-    if (authData.user) {
-      await supabase.from('profiles').upsert({
-        id: authData.user.id,
-        full_name: fullName,
-        email: cleanEmail,
-        registration_number: cleanRegNo,
-        login_identifier: cleanEmail,
+    // 1. Save to local storage database first so login always works
+    let localUser = null;
+    try {
+      localUser = await this._saveToLocalUser({
+        fullName: fullName.trim(),
+        registrationNumber: cleanRegNo,
         department,
-        year_of_study: yearOfStudy,
-        role: 'student',
-        status: 'active'
+        yearOfStudy,
+        email: cleanEmail,
+        password
       });
+    } catch (localErr) {
+      if (localErr.message && localErr.message.includes('already exists')) {
+        throw localErr;
+      }
+      console.warn('Local user save warning:', localErr);
     }
 
-    return authData;
+    // 2. Try Supabase Auth sign up gracefully
+    try {
+      const { data: authData, error: authError } = await supabase.auth.signUp({
+        email: cleanEmail,
+        password,
+        options: {
+          data: {
+            full_name: fullName.trim(),
+            registration_number: cleanRegNo,
+            department,
+            year_of_study: yearOfStudy
+          }
+        }
+      });
+
+      if (authError) {
+        console.warn('Supabase auth sign up warning:', authError.message || authError);
+      } else if (authData?.user) {
+        await supabase.from('profiles').upsert({
+          id: authData.user.id,
+          full_name: fullName.trim(),
+          email: cleanEmail,
+          registration_number: cleanRegNo,
+          login_identifier: cleanEmail,
+          department,
+          year_of_study: yearOfStudy,
+          role: 'student',
+          status: 'active'
+        });
+      }
+    } catch (supaErr) {
+      console.warn('Supabase connection error (proceeding with local registration):', supaErr);
+    }
+
+    return localUser || { user: { email: cleanEmail, name: fullName } };
   },
 
   async requestPasswordReset(identifier) {
@@ -238,12 +330,12 @@ export const authService = {
 
     const base = import.meta.env.BASE_URL || '/';
     const resetPath = `${base}reset-password`.replace(/\/\//g, '/');
-    const { error } = await supabase.auth.resetPasswordForEmail(targetEmail, {
-      redirectTo: `${window.location.origin}${resetPath}`
-    });
-
-    if (error) {
-      console.warn('Password reset request error:', error);
+    try {
+      await supabase.auth.resetPasswordForEmail(targetEmail, {
+        redirectTo: `${window.location.origin}${resetPath}`
+      });
+    } catch (err) {
+      console.warn('Password reset request error:', err);
     }
     return true;
   },
@@ -254,7 +346,7 @@ export const authService = {
     });
 
     if (error) {
-      throw new Error(error.message || 'Failed to update password.');
+      throw new Error(parseErrorMessage(error, 'Failed to update password.'));
     }
     return data;
   },
@@ -280,3 +372,4 @@ export const authService = {
     }
   }
 };
+

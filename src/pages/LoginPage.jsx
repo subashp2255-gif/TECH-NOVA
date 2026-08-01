@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../auth/AuthProvider';
-import { authService } from '../services/authService';
+import { authService, parseErrorMessage } from '../services/authService';
 import SeatSyncBrandPanel from '../components/auth/SeatSyncBrandPanel';
 import LoginCard from '../components/auth/LoginCard';
 import { BookOpen } from 'lucide-react';
@@ -28,12 +28,12 @@ export default function LoginPage() {
     setLoading(true);
     try {
       const loggedInUser = await login(identifier, password);
-      toast.success(`Welcome back, ${loggedInUser.name}!`);
+      toast.success(`Welcome back, ${loggedInUser.name || loggedInUser.fullName || 'User'}!`);
       const dest = authService.getDashboardRoute(loggedInUser.role);
       navigate(dest, { replace: true });
       return loggedInUser;
     } catch (err) {
-      const msg = err?.message || 'Invalid ID or password. Please check your credentials and try again.';
+      const msg = parseErrorMessage(err, 'Invalid ID or password. Please check your credentials and try again.');
       setErrorMsg(msg);
       toast.error(msg);
       throw err;

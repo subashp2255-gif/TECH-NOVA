@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
-import { authService } from '../services/authService';
+import { authService, parseErrorMessage } from '../services/authService';
 import { Card, CardContent } from '../components/shared/Card';
 import { Button } from '../components/shared/Button';
 import { Input } from '../components/shared/Input';
@@ -52,8 +52,9 @@ export default function StudentSignUpPage() {
       toast.success('Registration successful! You can now sign in.');
       navigate('/login', { replace: true });
     } catch (err) {
-      setErrorMsg(err.message || 'Failed to complete registration.');
-      toast.error(err.message || 'Registration failed.');
+      const msg = parseErrorMessage(err, 'Failed to complete registration.');
+      setErrorMsg(msg);
+      toast.error(msg);
     } finally {
       setLoading(false);
     }
