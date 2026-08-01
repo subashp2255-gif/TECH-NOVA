@@ -68,7 +68,6 @@ export const defaultZones = [
   { id: 'zone-b', floorId: 'floor-g', name: 'Zone B', type: 'group', description: 'Collaborative Group Study', active: true }
 ];
 
-// Generate 40 active seats for ground floor
 export const defaultSeats = Array.from({ length: 40 }, (_, i) => {
   const num = i + 1;
   const zoneId = num <= 20 ? 'zone-a' : 'zone-b';
@@ -92,7 +91,9 @@ export const defaultNotifications = [
     userId: 'USR-001',
     title: 'Welcome to SeatSync',
     message: 'Your student account is active. You can now reserve library study seats.',
+    createdAt: new Date().toISOString(),
     timestamp: new Date().toISOString(),
+    isRead: false,
     read: false
   }
 ];

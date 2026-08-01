@@ -9,6 +9,17 @@ import { Bell, CheckCircle2, Clock, Check, Sparkles } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
 import toast from 'react-hot-toast';
 
+function formatRelativeTime(dateInput) {
+  if (!dateInput) return 'Recently';
+  try {
+    const d = new Date(dateInput);
+    if (isNaN(d.getTime())) return 'Recently';
+    return formatDistanceToNow(d, { addSuffix: true });
+  } catch {
+    return 'Recently';
+  }
+}
+
 export default function Notifications() {
   const { user } = useAuth();
   const [notifications, setNotifications] = useState([]);
@@ -95,9 +106,9 @@ export default function Notifications() {
                     <span className={`font-bold text-sm ${!n.isRead ? 'text-brandBlue' : 'text-navy'}`}>{n.title}</span>
                     {!n.isRead && <Badge className="bg-brandBlue text-white text-[9px] px-2 py-0.5">New</Badge>}
                   </div>
-                  <p className="text-xs text-slate-600 leading-relaxed font-medium">{n.message}</p>
+                  <p className="text-slate-600 leading-relaxed text-[11px] font-medium">{n.message}</p>
                   <span className="text-[10px] text-slate-400 font-mono block pt-1">
-                    {formatDistanceToNow(new Date(n.createdAt), { addSuffix: true })}
+                    {formatRelativeTime(n.createdAt || n.timestamp)}
                   </span>
                 </div>
 

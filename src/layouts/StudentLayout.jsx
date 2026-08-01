@@ -627,7 +627,19 @@ export default function StudentLayout() {
                           <div className="space-y-0.5 flex-1">
                             <div className="flex items-center justify-between gap-2">
                               <span className={`font-bold ${!n.isRead ? 'text-brandBlue' : 'text-navy'}`}>{n.title}</span>
-                              <span className="text-[10px] text-slate-400 font-mono shrink-0">{formatDistanceToNow(new Date(n.createdAt), { addSuffix: true })}</span>
+                              <span className="text-[10px] text-slate-400 font-mono shrink-0">
+                                {(() => {
+                                  const dateVal = n.createdAt || n.timestamp;
+                                  if (!dateVal) return 'Recently';
+                                  try {
+                                    const d = new Date(dateVal);
+                                    if (isNaN(d.getTime())) return 'Recently';
+                                    return formatDistanceToNow(d, { addSuffix: true });
+                                  } catch {
+                                    return 'Recently';
+                                  }
+                                })()}
+                              </span>
                             </div>
                             <p className="text-slate-500 leading-relaxed text-[11px]">{n.message}</p>
                           </div>
