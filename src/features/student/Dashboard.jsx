@@ -116,10 +116,14 @@ export default function Dashboard() {
 
     const fetchWaitlistSummaries = async (slotsList) => {
         try {
+            const summaryPromises = slotsList.map(slot =>
+                waitlistService.getWaitlistSummaryForSlot(tomorrowDateStr, slot.id, user?.id)
+                    .then(res => ({ slotId: slot.id, res }))
+                    .catch(() => ({ slotId: slot.id, res: {} }))
+            );
+            const results = await Promise.all(summaryPromises);
             const summaries = {};
-            for (const slot of slotsList) {
-                summaries[slot.id] = await waitlistService.getWaitlistSummaryForSlot(tomorrowDateStr, slot.id, user?.id);
-            }
+            results.forEach(({ slotId, res }) => { summaries[slotId] = res; });
             setWaitlistSummaries(summaries);
         } catch (err) {
             console.warn('Failed to fetch waitlist summaries in Dashboard:', err);
@@ -142,11 +146,11 @@ export default function Dashboard() {
             setSlotsAvailability(slotsData);
             if (seatsData) setSeatsList(seatsData);
             setLastUpdated(new Date());
-            await fetchWaitlistSummaries(slotsData);
+            setLoading(false);
+            fetchWaitlistSummaries(slotsData);
         } catch (error) {
             console.error('Error fetching dashboard data', error);
             toast.error('Failed to update dashboard data');
-        } finally {
             setLoading(false);
         }
     }, [user, tomorrowDateStr]);

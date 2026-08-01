@@ -48,10 +48,14 @@ export default function FindSeat() {
 
   const fetchWaitlistSummaries = async (slotsList) => {
     try {
+      const summaryPromises = slotsList.map(slot =>
+        waitlistService.getWaitlistSummaryForSlot(tomorrowDate, slot.id, user?.id)
+          .then(res => ({ slotId: slot.id, res }))
+          .catch(() => ({ slotId: slot.id, res: {} }))
+      );
+      const results = await Promise.all(summaryPromises);
       const summaries = {};
-      for (const slot of slotsList) {
-        summaries[slot.id] = await waitlistService.getWaitlistSummaryForSlot(tomorrowDate, slot.id, user?.id);
-      }
+      results.forEach(({ slotId, res }) => { summaries[slotId] = res; });
       setWaitlistSummaries(summaries);
     } catch (err) {
       console.warn('Failed to fetch waitlist summaries:', err);
@@ -70,10 +74,10 @@ export default function FindSeat() {
       if (floorsData && floorsData.length > 0) {
         setSelectedFloor(floorsData[0]);
       }
-      await fetchWaitlistSummaries(slotsData);
+      setLoadingSlots(false);
+      fetchWaitlistSummaries(slotsData);
     } catch (error) {
       toast.error('Failed to load available slots.');
-    } finally {
       setLoadingSlots(false);
     }
   };
