@@ -1,4 +1,4 @@
-name: Deploy SeatSync to GitHub Pages
+﻿name: Deploy SeatSync to GitHub Pages
 
 on:
   push:
