@@ -41,6 +41,7 @@ Navigate to your **Supabase Dashboard** -> **SQL Editor** and run the migration 
 10. `10_checkin_checkout_rpcs.sql`: Defines `check_in_booking` and `check_out_booking` desk verification RPCs.
 11. `11_admin_ops_rpcs.sql`: Defines `set_user_account_status`, `disable_slot`, `set_room_status`, `set_seat_maintenance` admin RPCs.
 12. `12_seed_data.sql`: Seeds Central University Library, 2 floors, 40 seats (A-101 to A-140), time slots, and default booking policies.
+13. `13_automation_cron_jobs.sql`: Creates `automation_execution_logs` table, `SECURITY DEFINER` automation functions (`fn_run_auto_01_no_show_release`, `fn_run_auto_02_waitlist_allocation`, `fn_run_auto_03_waitlist_expiration`, `fn_run_auto_04_occupancy_alerts`), and registers 5-minute recurring `pg_cron` schedules.
 
 ---
 
@@ -58,6 +59,7 @@ In the **Supabase Dashboard**:
    - `waitlist_entries`
    - `notifications`
    - `seat_maintenance`
+   - `automation_execution_logs`
 
 ---
 
@@ -108,3 +110,6 @@ WHERE email = 'librarian@college.edu';
 3. **Admin Account Blocking & Ejection**:
    - Admin blocks a student's account on Admin Control Panel.
    - The student's browser immediately receives the Realtime signal, clears cached state, and redirects to `/login` with an "Account Blocked" notification. RLS blocks further data operations.
+
+4. **Backend Automated Jobs**:
+   - `pg_cron` executes `AUTO-01`, `AUTO-02`, `AUTO-03`, and `AUTO-04` every 5 minutes in background without needing any active browser tab open.

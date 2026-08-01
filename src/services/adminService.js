@@ -2,6 +2,7 @@ import { supabase } from '../lib/supabase';
 import { db } from './mockDatabase';
 import { slotService } from './slotService';
 import { notificationService } from './notificationService';
+import { getTodayKolkataDate } from './occupancyService';
 
 export const adminService = {
   // 1. LIVE OPERATIONS METRICS
@@ -16,16 +17,18 @@ export const adminService = {
       ]);
 
       if (seats && rooms) {
-        const todayStr = new Date().toISOString().split('T')[0];
+        const todayStr = getTodayKolkataDate();
         const todayBookings = (bookings || []).filter(b => b.booking_date === todayStr && !['cancelled', 'slot_cancelled'].includes(b.status));
         const checkedInCount = todayBookings.filter(b => b.status === 'checked_in').length;
+        const reservedCount = todayBookings.filter(b => ['confirmed', 'awaiting_check_in'].includes(b.status)).length;
         const occupiedSeats = checkedInCount;
         const maintenanceSeats = (seats || []).filter(s => s.status === 'maintenance' || (maintenance || []).some(m => m.seat_id === s.id)).length;
-        const availableSeats = Math.max(0, seats.length - occupiedSeats - maintenanceSeats);
+        const availableSeats = Math.max(0, seats.length - occupiedSeats - reservedCount - maintenanceSeats);
 
         return {
           totalSeats: seats.length || 40,
           occupiedSeats,
+          reservedCount,
           availableSeats,
           todayBookingsCount: todayBookings.length,
           checkedInCount,
@@ -49,16 +52,18 @@ export const adminService = {
       db.read('seatsync_users') || []
     ]);
 
-    const todayStr = new Date().toISOString().split('T')[0];
+    const todayStr = getTodayKolkataDate();
     const todayBookings = bookings.filter(b => b.bookingDate === todayStr && b.status !== 'CANCELLED_BY_ADMIN' && b.status !== 'cancelled');
     const checkedInCount = todayBookings.filter(b => b.status === 'active' || b.status === 'checked_in').length;
+    const reservedCount = todayBookings.filter(b => b.status === 'confirmed').length;
     const occupiedSeats = checkedInCount;
     const maintenanceSeats = seats.filter(s => s.status === 'maintenance' || maintenance.some(m => m.seatNumber === s.seatNumber && m.status !== 'Resolved')).length;
-    const availableSeats = Math.max(0, seats.length - occupiedSeats - maintenanceSeats);
+    const availableSeats = Math.max(0, seats.length - occupiedSeats - reservedCount - maintenanceSeats);
 
     return {
       totalSeats: seats.length || 40,
       occupiedSeats,
+      reservedCount,
       availableSeats,
       todayBookingsCount: todayBookings.length,
       checkedInCount,

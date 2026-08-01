@@ -3,10 +3,11 @@ import { db } from './mockDatabase';
 import { bookingService } from './bookingService';
 import { waitlistService } from './waitlistService';
 import { slotService } from './slotService';
+import { getTodayKolkataDate } from './occupancyService';
 
 export const librarianService = {
   // 1. DASHBOARD METRICS
-  async getDashboardMetrics(dateStr = new Date().toISOString().split('T')[0]) {
+  async getDashboardMetrics(dateStr = getTodayKolkataDate()) {
     try {
       const [{ data: bookings }, { data: seats }, { data: waitlist }, { data: users }, { data: maintenance }] = await Promise.all([
         supabase.from('bookings').select('*').eq('booking_date', dateStr),
@@ -25,10 +26,11 @@ export const librarianService = {
 
         const todayBookings = bList.filter(b => !['cancelled', 'slot_cancelled'].includes(b.status));
         const checkedInCount = todayBookings.filter(b => b.status === 'checked_in').length;
+        const reservedCount = todayBookings.filter(b => ['confirmed', 'awaiting_check_in'].includes(b.status)).length;
         const occupiedSeatsCount = checkedInCount;
         const maintenanceSeatsCount = sList.filter(s => s.status === 'maintenance' || mntList.some(m => m.seat_id === s.id)).length;
         const totalSeats = sList.length || 40;
-        const availableSeatsCount = Math.max(0, totalSeats - occupiedSeatsCount - maintenanceSeatsCount);
+        const availableSeatsCount = Math.max(0, totalSeats - occupiedSeatsCount - reservedCount - maintenanceSeatsCount);
         const occupancyPercentage = totalSeats > 0 ? Math.round((occupiedSeatsCount / totalSeats) * 100) : 0;
 
         const waitingCount = wList.length;
@@ -36,6 +38,7 @@ export const librarianService = {
 
         return {
           occupiedSeatsCount,
+          reservedCount,
           availableSeatsCount,
           totalSeats,
           todayBookingsCount: todayBookings.length,
@@ -65,26 +68,23 @@ export const librarianService = {
     const sList = seats || [];
     const wList = waitlist || [];
     const uList = users || [];
-    const chkList = checkins || [];
-    const mntList = maintenance || [];
 
     const todayBookings = bList.filter(b => b.bookingDate === dateStr && b.status !== 'CANCELLED_BY_ADMIN' && b.status !== 'cancelled');
     const checkedInCount = todayBookings.filter(b => b.status === 'active' || b.status === 'checked_in').length;
+    const reservedCount = todayBookings.filter(b => b.status === 'confirmed').length;
     const occupiedSeatsCount = checkedInCount;
-    const maintenanceSeatsCount = sList.filter(s => s.status === 'maintenance' || mntList.some(m => m.seatNumber === s.seatNumber && m.status !== 'Resolved')).length;
+    const maintenanceSeatsCount = sList.filter(s => s.status === 'maintenance').length;
     const totalSeats = sList.length || 40;
-    const availableSeatsCount = Math.max(0, totalSeats - occupiedSeatsCount - maintenanceSeatsCount);
+    const availableSeatsCount = Math.max(0, totalSeats - occupiedSeatsCount - reservedCount - maintenanceSeatsCount);
     const occupancyPercentage = totalSeats > 0 ? Math.round((occupiedSeatsCount / totalSeats) * 100) : 0;
 
     const waitingCount = wList.filter(w => w.dateStr === dateStr && (w.status || '').toLowerCase() === 'waiting').length;
     const students = uList.filter(u => u.role === 'STUDENT');
     const noShowsCount = students.reduce((sum, u) => sum + (u.noShowCount || 0), 0);
 
-    const recentCheckins = chkList.slice(-5).reverse();
-    const upcomingReservations = todayBookings.filter(b => b.status === 'confirmed' || b.status === 'ACTIVE').slice(0, 5);
-
     return {
       occupiedSeatsCount,
+      reservedCount,
       availableSeatsCount,
       totalSeats,
       todayBookingsCount: todayBookings.length,
@@ -93,8 +93,8 @@ export const librarianService = {
       noShowsCount,
       maintenanceSeatsCount,
       occupancyPercentage,
-      recentCheckins,
-      upcomingReservations,
+      recentCheckins: [],
+      upcomingReservations: todayBookings.slice(0, 5),
       seatsNeedingAttention: sList.filter(s => s.status === 'maintenance')
     };
   },
@@ -126,7 +126,6 @@ export const librarianService = {
       }
     } catch { /* fallback */ }
 
-    // Fallback to local DB search
     const bookings = (await db.read('seatsync_bookings')) || [];
     const matched = bookings.find(b =>
       String(b.id) === cleanToken ||

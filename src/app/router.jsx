@@ -22,7 +22,7 @@ import WaitingList from '../features/student/WaitingList';
 import Notifications from '../features/student/Notifications';
 import Profile from '../features/student/Profile';
 
-// Librarian Features (All 16 Operations Modules)
+// Librarian Features
 import LibrarianDashboard from '../features/librarian/LibrarianDashboard';
 import QRScannerPage from '../features/librarian/QRScannerPage';
 import CheckInOutPage from '../features/librarian/CheckInOutPage';
@@ -33,14 +33,13 @@ import BookingLookupPage from '../features/librarian/BookingLookupPage';
 import LiveOccupancyPage from '../features/librarian/LiveOccupancyPage';
 import NoShowsMonitorPage from '../features/librarian/NoShowsMonitorPage';
 import SeatMaintenancePage from '../features/librarian/SeatMaintenancePage';
-import IncidentReportsPage from '../features/librarian/IncidentReportsPage';
 import LibrarianNotificationsPage from '../features/librarian/LibrarianNotificationsPage';
 import LibrarianActivityLogsPage from '../features/librarian/LibrarianActivityLogsPage';
 import LibrarianReportsPage from '../features/librarian/LibrarianReportsPage';
 import ShiftHandoverPage from '../features/librarian/ShiftHandoverPage';
 import LibrarianProfilePage from '../features/librarian/LibrarianProfilePage';
 
-// Admin Features (All 20 Production Control System Modules)
+// Admin Features
 import AdminDashboard from '../features/admin/AdminDashboard';
 import LiveOperationsPage from '../features/admin/LiveOperationsPage';
 import StudentManagementPage from '../features/admin/StudentManagementPage';
@@ -66,6 +65,7 @@ import AuditLogsPage from '../features/admin/AuditLogsPage';
 import AutomationRulesPage from '../features/admin/AutomationRulesPage';
 import AdminSettingsPage from '../features/admin/AdminSettingsPage';
 import AdminProfilePage from '../features/admin/AdminProfilePage';
+import SupabaseDiagnosticsPage from '../features/admin/SupabaseDiagnosticsPage';
 
 const router = createBrowserRouter([
   {
@@ -102,7 +102,7 @@ const router = createBrowserRouter([
     ],
   },
 
-  // LIBRARIAN DASHBOARD ROUTES (16 Operations Modules)
+  // LIBRARIAN DASHBOARD ROUTES
   {
     path: '/librarian',
     element: (
@@ -125,7 +125,7 @@ const router = createBrowserRouter([
       { path: 'no-shows', element: <NoShowsMonitorPage /> },
       { path: 'students', element: <Navigate to="/librarian/no-shows" replace /> },
       { path: 'maintenance', element: <SeatMaintenancePage /> },
-      { path: 'incidents', element: <IncidentReportsPage /> },
+      { path: 'incidents', element: <Navigate to="/librarian/maintenance" replace /> },
       { path: 'notifications', element: <LibrarianNotificationsPage /> },
       { path: 'activity-logs', element: <LibrarianActivityLogsPage /> },
       { path: 'analytics', element: <LibrarianReportsPage /> },
@@ -134,7 +134,7 @@ const router = createBrowserRouter([
     ],
   },
 
-  // ADMIN DASHBOARD ROUTES (20 Complete Control System Modules)
+  // ADMIN DASHBOARD ROUTES
   {
     path: '/admin',
     element: (
@@ -171,6 +171,7 @@ const router = createBrowserRouter([
       { path: 'bulk-data', element: <BulkDataPage /> },
       { path: 'database-usage', element: <ReportsAnalyticsPage /> },
       { path: 'system-health', element: <SystemHealthPage /> },
+      { path: 'diagnostics', element: <SupabaseDiagnosticsPage /> },
       { path: 'security', element: <SecurityCentrePage /> },
       { path: 'audit-logs', element: <AuditLogsPage /> },
       { path: 'automation', element: <AutomationRulesPage /> },

@@ -10,7 +10,7 @@ import { Badge } from '../../components/shared/Badge';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '../../components/shared/Dialog';
 import { format } from 'date-fns';
 import { 
-  Calendar, Clock, CheckCircle2, AlertTriangle, AlertCircle, ArrowRight, ShieldCheck, MapPin, Search, Users, Sparkles, Filter, ChevronRight
+  Calendar, Clock, CheckCircle2, AlertTriangle, AlertCircle, ArrowRight, ShieldCheck, MapPin, Search, Users, Sparkles, Filter, ChevronRight, Zap
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import WaitlistModal from '../../components/student/WaitlistModal';
@@ -42,6 +42,7 @@ export default function FindSeat() {
   const [waitlistModalOpen, setWaitlistModalOpen] = useState(false);
   const [waitlistModalMode, setWaitlistModalMode] = useState('confirm');
   const [targetWaitlistSlot, setTargetWaitlistSlot] = useState(null);
+  const [fillingDemo, setFillingDemo] = useState(false);
 
   const tomorrowDate = bookingService.getTomorrowDateStr();
 
@@ -86,6 +87,19 @@ export default function FindSeat() {
       fetchInitialData();
     }
   });
+
+  const handleFillAfternoonSlot1Demo = async () => {
+    setFillingDemo(true);
+    try {
+      await waitlistService.fillAfternoonSlot1(tomorrowDate);
+      toast.success('Afternoon Slot 1 filled with 40 mock bookings!');
+      await fetchInitialData();
+    } catch (err) {
+      toast.error('Failed to fill Afternoon Slot 1.');
+    } finally {
+      setFillingDemo(false);
+    }
+  };
 
   const fetchSeats = async () => {
     if (!selectedSlot || !selectedFloor) return;
@@ -231,11 +245,21 @@ export default function FindSeat() {
       {/* 1. SLOT SELECTION */}
       {!selectedSlot ? (
         <div className="space-y-4">
-          <div className="flex items-center justify-between">
+          <div className="flex flex-wrap items-center justify-between gap-3">
             <h2 className="text-lg font-bold text-navy flex items-center gap-2">
               <Clock size={20} className="text-brandBlue" /> Step 1: Select Time Slot
             </h2>
-            <Badge variant="outline" className="text-xs font-semibold">Tomorrow's Slots</Badge>
+
+            <div className="flex items-center gap-3">
+              <Button
+                onClick={handleFillAfternoonSlot1Demo}
+                disabled={fillingDemo}
+                className="bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold h-8 px-3 rounded-xl shadow-xs flex items-center gap-1.5"
+              >
+                <Zap size={13} /> {fillingDemo ? 'Filling Slot...' : 'Fill Afternoon Slot 1 (40 Seats Demo)'}
+              </Button>
+              <Badge variant="outline" className="text-xs font-semibold">Tomorrow's Slots</Badge>
+            </div>
           </div>
 
           {loadingSlots ? (

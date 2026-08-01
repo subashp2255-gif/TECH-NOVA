@@ -55,11 +55,7 @@ export default function WaitingList() {
     fetchWaitlistData();
   }, [user]);
 
-  useSync((event) => {
-    if (event?.type === 'storage_change' || event?.type?.startsWith('WAITLIST_')) {
-      fetchWaitlistData();
-    }
-  });
+  useSync(['waitlist_entries', 'seatsync_waitlist'], fetchWaitlistData);
 
   const handleLeaveQueue = async (entryId) => {
     try {
@@ -99,7 +95,8 @@ export default function WaitingList() {
           {myWaitlists.map(entry => {
             const slot = entry.slot;
             const summary = entry.summary || {};
-            const position = summary.studentPosition || 1;
+            const position = summary.studentPosition || entry.queuePosition || 1;
+            const aheadCount = Math.max(0, position - 1);
 
             return (
               <Card key={entry.id} className="border-2 border-amber-300/80 bg-white rounded-2xl overflow-hidden shadow-xs">
@@ -109,7 +106,7 @@ export default function WaitingList() {
                       <Badge className="bg-amber-500 text-white font-extrabold text-xs">
                         Waitlisted Queue
                       </Badge>
-                      <span className="text-xs font-mono font-bold text-slate-500">ID: {entry.id}</span>
+                      <span className="text-xs font-mono font-bold text-slate-500">Entry ID: {entry.id}</span>
                     </div>
 
                     <div className="bg-amber-500 text-white font-mono font-black text-sm px-3 py-1 rounded-xl shadow-xs">
@@ -120,12 +117,12 @@ export default function WaitingList() {
                   <div className="grid sm:grid-cols-3 gap-3 bg-amber-50/50 border border-amber-200/60 rounded-xl p-4 text-xs">
                     <div>
                       <span className="text-slate-400 font-bold text-[10px] uppercase block">Slot Label</span>
-                      <span className="font-extrabold text-navy text-sm">{slot?.label || entry.slotId}</span>
+                      <span className="font-extrabold text-navy text-sm">{slot?.name || slot?.label || 'Afternoon Slot 1'}</span>
                     </div>
                     <div>
                       <span className="text-slate-400 font-bold text-[10px] uppercase block">Time Window</span>
                       <span className="font-bold text-brandBlue font-mono">
-                        {format12HourTime(slot?.startTime)} – {format12HourTime(slot?.endTime)}
+                        {slot?.startTime ? `${format12HourTime(slot.startTime)} – ${format12HourTime(slot.endTime)}` : '02:00 PM – 03:00 PM'}
                       </span>
                     </div>
                     <div>
@@ -134,9 +131,18 @@ export default function WaitingList() {
                     </div>
                   </div>
 
+                  <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold text-slate-700 flex items-center justify-between">
+                    <span className="text-amber-800 font-bold">
+                      {aheadCount > 0
+                        ? `There are ${aheadCount} student(s) ahead of you in the queue.`
+                        : 'You are next in line! You will receive a notification as soon as a seat opens.'}
+                    </span>
+                    <span className="text-[10px] text-slate-400 font-mono">Privacy Protected</span>
+                  </div>
+
                   <div className="flex items-center justify-between pt-2">
                     <span className="text-xs text-slate-500 font-medium flex items-center gap-1.5">
-                      <Bell size={14} className="text-blue-600" /> Notifications set for automatic seat allocation
+                      <Bell size={14} className="text-blue-600" /> Auto-allocation enabled upon seat release
                     </span>
 
                     <Button
@@ -145,7 +151,7 @@ export default function WaitingList() {
                       onClick={() => handleLeaveQueue(entry.id)}
                       className="h-9 text-xs font-bold border-red-200 text-red-600 hover:bg-red-50 rounded-xl"
                     >
-                      Leave Queue
+                      Leave Waiting List
                     </Button>
                   </div>
                 </CardContent>

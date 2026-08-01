@@ -4,7 +4,7 @@ import { useAuth } from '../auth/AuthProvider';
 import {
   LayoutDashboard, Activity, Users, UserCheck, ShieldAlert, KeyRound,
   Building2, Armchair, Calendar, Sliders, BookmarkCheck, ListOrdered,
-  Wrench, AlertOctagon, RefreshCw, CheckCheck, Bell, Megaphone, HelpCircle,
+  Wrench, AlertOctagon, RefreshCw, CheckCheck, Megaphone, HelpCircle,
   Clock, ArrowRightLeft, BarChart3, Database, FileSpreadsheet, Server,
   ShieldCheck, History, Cpu, Settings, User, LogOut, Menu, X, ChevronDown,
   ChevronRight, BookOpen, Sparkles, PanelLeftClose, PanelLeftOpen
@@ -50,7 +50,6 @@ const NAV_GROUPS = [
   {
     title: 'COMMUNICATION',
     items: [
-      { name: 'Notifications', path: '/admin/notifications', icon: Bell },
       { name: 'Announcements', path: '/admin/announcements', icon: Megaphone },
       { name: 'Feedback & Support', path: '/admin/support', icon: HelpCircle }
     ]
@@ -66,7 +65,8 @@ const NAV_GROUPS = [
     items: [
       { name: 'Analytics & Reports', path: '/admin/reports', icon: BarChart3 },
       { name: 'Bulk Data Management', path: '/admin/bulk-data', icon: FileSpreadsheet },
-      { name: 'System Health', path: '/admin/system-health', icon: Server }
+      { name: 'System Health', path: '/admin/system-health', icon: Server },
+      { name: 'Supabase Diagnostics', path: '/admin/diagnostics', icon: Database }
     ]
   },
   {
@@ -114,7 +114,7 @@ export default function AdminLayout() {
 
   return (
     <div className="flex h-screen bg-slate-50/60 overflow-hidden font-sans">
-      {/* Desktop Sidebar (Matching Student Portal Theme) */}
+      {/* Desktop Sidebar */}
       <aside className={`hidden md:flex flex-col bg-white border-r border-slate-200/80 shadow-sm transition-all duration-300 ${
         isSidebarCollapsed ? 'w-20' : 'w-64'
       } shrink-0`}>

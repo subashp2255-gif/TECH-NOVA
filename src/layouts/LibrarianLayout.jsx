@@ -34,8 +34,7 @@ const NAV_GROUPS = [
     items: [
       { name: 'Live Occupancy', path: '/librarian/occupancy', icon: Eye },
       { name: 'No-Show Monitor', path: '/librarian/no-shows', icon: ShieldAlert },
-      { name: 'Seat Maintenance', path: '/librarian/maintenance', icon: Wrench },
-      { name: 'Incident Reports', path: '/librarian/incidents', icon: AlertOctagon }
+      { name: 'Seat Maintenance', path: '/librarian/maintenance', icon: Wrench }
     ]
   },
   {
@@ -83,7 +82,7 @@ export default function LibrarianLayout() {
 
   return (
     <div className="flex h-screen bg-slate-50/60 overflow-hidden font-sans">
-      {/* Desktop Sidebar (Matching Student Dashboard Style) */}
+      {/* Desktop Sidebar */}
       <aside className={`hidden md:flex flex-col bg-white border-r border-slate-200/80 shadow-sm transition-all duration-300 ${
         isSidebarCollapsed ? 'w-20' : 'w-64'
       } shrink-0`}>

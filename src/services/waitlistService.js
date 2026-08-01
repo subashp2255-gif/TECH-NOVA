@@ -2,6 +2,7 @@ import { supabase } from '../lib/supabase';
 import { db } from './mockDatabase';
 import { notificationService } from './notificationService';
 import { slotService } from './slotService';
+import { bookingService } from './bookingService';
 
 export const waitlistService = {
   async getStudentWaitlistEntries(studentId) {
@@ -222,5 +223,102 @@ export const waitlistService = {
         });
       }
     } catch { /* fallback */ }
+  },
+
+  // FILL AFTERNOON SLOT 1 WITH 40 MOCK BOOKINGS
+  async fillAfternoonSlot1(dateStr) {
+    const tomorrowStr = dateStr || bookingService.getTomorrowDateStr();
+    const seats = (await db.read('seatsync_seats')) || [];
+    const bookings = (await db.read('seatsync_bookings')) || [];
+
+    // Filter out existing demo bookings for Afternoon Slot 1 (SLOT-05) on tomorrowStr
+    const otherBookings = bookings.filter(b => !(b.slotId === 'SLOT-05' && b.bookingDate === tomorrowStr));
+
+    // Generate 40 confirmed bookings for Afternoon Slot 1
+    const demoBookings = [];
+    const seatList = seats.length >= 40 ? seats.slice(0, 40) : Array.from({ length: 40 }, (_, i) => ({
+      id: `seat-${i + 1}`,
+      seatNumber: `A-${101 + i}`
+    }));
+
+    for (let i = 0; i < 40; i++) {
+      const seat = seatList[i];
+      demoBookings.push({
+        id: `BK-DEMO-A1-${i + 1}`,
+        booking_code: `BK-DEMO-A1-${i + 1}`,
+        studentId: `demo-student-${i + 1}`,
+        studentName: `Demo Student ${String(i + 1).padStart(2, '0')}`,
+        collegeId: `DEMO${String(i + 1).padStart(3, '0')}`,
+        studentCollegeId: `DEMO${String(i + 1).padStart(3, '0')}`,
+        bookingDate: tomorrowStr,
+        slotId: 'SLOT-05',
+        slotTime: '12:00 PM – 01:00 PM',
+        floorId: 'floor-1',
+        floorName: 'Ground Floor',
+        seatId: seat.id,
+        seatNumber: seat.seatNumber || `A-${101 + i}`,
+        status: 'confirmed',
+        is_test_data: true,
+        test_scenario_id: 'waitlist-demo-001',
+        createdAt: new Date().toISOString()
+      });
+    }
+
+    const updatedBookings = [...demoBookings, ...otherBookings];
+    await db.write('seatsync_bookings', updatedBookings);
+
+    // Also attempt Supabase sync
+    try {
+      const { data: slots } = await supabase.from('slots').select('id, name');
+      const targetSlot = slots?.find(s => s.name?.toLowerCase().includes('afternoon') || s.id === 'SLOT-05') || slots?.[0];
+      const { data: seatsData } = await supabase.from('seats').select('id').limit(40);
+      const { data: libData } = await supabase.from('libraries').select('id').limit(1).single();
+      const { data: roomData } = await supabase.from('rooms').select('id').limit(1).single();
+
+      if (targetSlot && seatsData && libData && roomData) {
+        const sbBookings = seatsData.map((s, idx) => ({
+          booking_code: `BK-DEMO-A1-${idx + 1}`,
+          qr_token: `SS-DEMO-A1-${idx + 1}`,
+          student_id: '00000000-0000-0000-0000-' + String(idx + 1).padStart(12, '0'),
+          library_id: libData.id,
+          room_id: roomData.id,
+          seat_id: s.id,
+          slot_id: targetSlot.id,
+          booking_date: tomorrowStr,
+          status: 'confirmed',
+          is_test_data: true,
+          test_scenario_id: 'waitlist-demo-001'
+        }));
+
+        await supabase.from('bookings').upsert(sbBookings, { onConflict: 'booking_code' });
+      }
+    } catch { /* fallback */ }
+
+    return { success: true, count: 40 };
+  },
+
+  // DEMO SCENARIO MANAGERS
+  async prepareDemoScenario(includeQueue = true) {
+    await this.fillAfternoonSlot1();
+    try {
+      const { data, error } = await supabase.rpc('prepare_waitlist_demo_scenario', {
+        p_include_waitlist_queue: includeQueue
+      });
+      if (!error && data) return data;
+    } catch { /* fallback */ }
+    return { success: true, message: 'Afternoon Slot 1 filled with 40 mock bookings for demo.' };
+  },
+
+  async resetDemoScenario() {
+    try {
+      const { data, error } = await supabase.rpc('reset_waitlist_demo_scenario');
+      if (!error && data) return data;
+    } catch { /* fallback */ }
+
+    const bookings = (await db.read('seatsync_bookings')) || [];
+    const filtered = bookings.filter(b => !b.is_test_data && b.test_scenario_id !== 'waitlist-demo-001');
+    await db.write('seatsync_bookings', filtered);
+
+    return { success: true, message: 'Demo scenario data cleared.' };
   }
 };

@@ -1,270 +1,293 @@
-import React, { useState, useEffect } from 'react';
-import { useAuth } from '../../auth/AuthProvider';
-import { db } from '../../services/mockDatabase';
+import React, { useEffect, useState } from 'react';
+import { supabase } from '../../lib/supabase';
 import { librarianService } from '../../services/librarianService';
-import { Card, CardContent, CardHeader, CardTitle } from '../../components/shared/Card';
+import { useSync } from '../../hooks/useSync';
+import { db } from '../../services/mockDatabase';
+import { Card, CardContent } from '../../components/shared/Card';
 import { Button } from '../../components/shared/Button';
 import { Input } from '../../components/shared/Input';
+import { Label } from '../../components/shared/Label';
 import { Badge } from '../../components/shared/Badge';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '../../components/shared/Dialog';
-import {
-  Wrench, AlertTriangle, Plus, CheckCircle2, Clock, MapPin,
-  ShieldCheck, RefreshCw, User, FileText
-} from 'lucide-react';
+import { Armchair, Plus, Search, RefreshCw, Zap, Sun, Wrench } from 'lucide-react';
 import toast from 'react-hot-toast';
 
 export default function SeatMaintenancePage() {
-  const { user: staffUser } = useAuth();
-  const [maintenanceList, setMaintenanceList] = useState([]);
   const [seats, setSeats] = useState([]);
-  const [isReportModalOpen, setIsReportModalOpen] = useState(false);
+  const [search, setSearch] = useState('');
+  const [loading, setLoading] = useState(true);
 
-  // Form State
-  const [seatNumber, setSeatNumber] = useState('');
-  const [category, setCategory] = useState('Broken Frame / Cushion');
-  const [description, setDescription] = useState('');
-  const [priority, setPriority] = useState('Medium');
-  const [expectedResolution, setExpectedResolution] = useState('Within 24 Hours');
-  const [loading, setLoading] = useState(false);
+  const [addModalOpen, setAddModalOpen] = useState(false);
+  const [newSeat, setNewSeat] = useState({
+    seatNumber: '',
+    zoneId: 'zone-a',
+    powerOutlet: true,
+    nearWindow: false
+  });
 
-  useEffect(() => {
-    loadData();
-  }, []);
-
-  const loadData = async () => {
+  const fetchSeats = async () => {
     try {
-      const [mntData, seatsData] = await Promise.all([
-        db.read('seatsync_maintenance') || [],
-        db.read('seatsync_seats') || []
-      ]);
-      setMaintenanceList(mntData.reverse());
-      setSeats(seatsData);
-    } catch (err) {
-      console.warn('Failed to load maintenance data:', err);
-    }
-  };
+      setLoading(true);
+      const { data, error } = await supabase.from('seats').select('*').order('seat_number');
+      if (!error && data && data.length > 0) {
+        setSeats(data.map(s => ({
+          id: s.id,
+          seatNumber: s.seat_number,
+          type: s.seat_type || 'Quiet Study (Zone A)',
+          zoneId: s.is_accessible ? 'zone-a' : 'zone-b',
+          powerOutlet: s.has_power_socket,
+          nearWindow: s.is_accessible,
+          status: s.status === 'available' ? 'active' : s.status
+        })));
+        return;
+      }
+    } catch { /* fallback */ }
 
-  const handleReportMaintenance = async (e) => {
-    e.preventDefault();
-    if (!seatNumber) {
-      toast.error('Please select a seat number.');
-      return;
-    }
-    if (!description.trim()) {
-      toast.error('Please provide a brief issue description.');
-      return;
-    }
-
-    setLoading(true);
     try {
-      await librarianService.reportSeatMaintenance({
-        seatNumber,
-        category,
-        description,
-        priority,
-        expectedResolution,
-        staffUser
-      });
-
-      toast.success(`Seat ${seatNumber} marked under maintenance.`);
-      setIsReportModalOpen(false);
-      setSeatNumber('');
-      setDescription('');
-      await loadData();
-    } catch (err) {
-      toast.error(err.message || 'Failed to report maintenance ticket.');
+      const data = await db.read('seatsync_seats') || [];
+      setSeats(data.map(s => ({
+        ...s,
+        seatNumber: s.seatNumber || s.id,
+        type: s.type || (s.zoneId === 'zone-a' ? 'Quiet Study (Zone A)' : 'Group Discussion (Zone B)'),
+        status: s.status === 'available' ? 'active' : (s.status || 'active')
+      })));
+    } catch {
+      toast.error('Failed to load seats.');
     } finally {
       setLoading(false);
     }
   };
 
-  const handleUpdateStatus = async (ticketId, status) => {
+  useEffect(() => {
+    fetchSeats();
+  }, []);
+
+  useSync(['seats', 'seatsync_seats'], fetchSeats);
+
+  const handleAddSeat = async (e) => {
+    e.preventDefault();
+    if (!newSeat.seatNumber.trim()) {
+      toast.error('Please enter Seat Number.');
+      return;
+    }
+
     try {
-      await librarianService.updateMaintenanceStatus(ticketId, status, 'Resolved by staff', staffUser);
-      toast.success(`Ticket ${ticketId} updated to ${status}.`);
-      await loadData();
-    } catch (err) {
-      toast.error('Failed to update ticket status.');
+      const { data: roomData } = await supabase.from('rooms').select('id').limit(1).single();
+      if (roomData) {
+        const { error } = await supabase.from('seats').insert({
+          room_id: roomData.id,
+          seat_number: newSeat.seatNumber.trim(),
+          seat_type: newSeat.zoneId === 'zone-a' ? 'Quiet Study (Zone A)' : 'Group Discussion (Zone B)',
+          has_power_socket: newSeat.powerOutlet,
+          is_accessible: newSeat.nearWindow,
+          status: 'available'
+        });
+        if (!error) {
+          toast.success(`Seat ${newSeat.seatNumber.trim()} added successfully!`);
+          setAddModalOpen(false);
+          setNewSeat({ seatNumber: '', zoneId: 'zone-a', powerOutlet: true, nearWindow: false });
+          fetchSeats();
+          return;
+        }
+      }
+    } catch { /* fallback */ }
+
+    try {
+      const data = await db.read('seatsync_seats') || [];
+      const created = {
+        id: `SEAT-${Date.now()}`,
+        seatNumber: newSeat.seatNumber.trim(),
+        floorId: 'floor-g',
+        zoneId: newSeat.zoneId,
+        type: newSeat.zoneId === 'zone-a' ? 'Quiet Study (Zone A)' : 'Group Discussion (Zone B)',
+        status: 'active',
+        powerOutlet: newSeat.powerOutlet,
+        nearWindow: newSeat.nearWindow
+      };
+
+      data.push(created);
+      await db.write('seatsync_seats', data);
+      toast.success(`Seat ${created.seatNumber} added successfully!`);
+      setAddModalOpen(false);
+      setNewSeat({ seatNumber: '', zoneId: 'zone-a', powerOutlet: true, nearWindow: false });
+      fetchSeats();
+    } catch {
+      toast.error('Failed to add seat.');
     }
   };
 
+  const handleToggleMaintenance = async (seat) => {
+    try {
+      const isCurrentlyMaintenance = seat.status === 'maintenance';
+      if (isCurrentlyMaintenance) {
+        await supabase.from('seats').update({ status: 'available' }).eq('id', seat.id);
+      } else {
+        await librarianService.reportSeatMaintenance({
+          seatNumber: seat.seatNumber,
+          category: 'Desk Maintenance',
+          description: 'Flagged for maintenance by librarian',
+          priority: 'Medium'
+        });
+      }
+
+      // Local fallback sync
+      const data = await db.read('seatsync_seats') || [];
+      const target = data.find(s => s.id === seat.id || s.seatNumber === seat.seatNumber);
+      if (target) {
+        target.status = isCurrentlyMaintenance ? 'active' : 'maintenance';
+        await db.write('seatsync_seats', data);
+      }
+
+      toast.success(`Seat ${seat.seatNumber} status updated.`);
+      fetchSeats();
+    } catch {
+      toast.error('Failed to update seat status.');
+    }
+  };
+
+  const filtered = seats.filter(s =>
+    (s.seatNumber || '').toLowerCase().includes(search.toLowerCase()) ||
+    (s.type || '').toLowerCase().includes(search.toLowerCase())
+  );
+
   return (
-    <div className="space-y-6 max-w-6xl mx-auto animate-in fade-in duration-300 pb-12">
+    <div className="space-y-6 max-w-7xl mx-auto animate-in fade-in duration-300 pb-12">
+      {/* PAGE HEADER */}
       <div className="flex flex-wrap items-center justify-between gap-4 pb-2 border-b border-slate-200">
         <div>
           <h1 className="text-2xl sm:text-3xl font-black text-navy tracking-tight flex items-center gap-2">
-            <Wrench className="text-teal-600" size={28} /> Seat Maintenance & Inspection Desk
+            <Armchair className="text-teal-600" size={28} /> Seat Inventory & Carrels
           </h1>
           <p className="text-xs sm:text-sm text-slate-500 font-medium mt-1">
-            Report damaged library furniture, track repair status, and prevent bookings for seats under repair.
+            Configure individual study seats, power outlets, window orientation, and maintenance status.
           </p>
         </div>
 
-        <Button
-          onClick={() => setIsReportModalOpen(true)}
-          className="bg-teal-600 hover:bg-teal-700 text-white font-bold text-xs h-10 px-5 rounded-xl shadow-xs flex items-center gap-2"
-        >
-          <Plus size={16} /> Report Damaged Seat
-        </Button>
+        <div className="flex items-center gap-3">
+          <Button onClick={fetchSeats} variant="outline" className="border-slate-300 text-slate-600 hover:bg-slate-100 text-xs font-bold rounded-xl h-9">
+            <RefreshCw size={14} className="mr-1.5" /> Refresh Inventory
+          </Button>
+          <Button onClick={() => setAddModalOpen(true)} className="bg-teal-600 hover:bg-teal-700 text-white font-bold text-xs rounded-xl h-9">
+            <Plus size={16} className="mr-1.5" /> Add New Seat
+          </Button>
+        </div>
       </div>
 
-      {/* TICKETS LIST TABLE */}
-      <Card className="border border-slate-200/80 bg-white rounded-2xl p-6 shadow-xs space-y-4">
-        <h2 className="text-base font-bold text-navy flex items-center gap-2">
-          <FileText size={18} className="text-teal-600" /> Maintenance Tickets Log
-        </h2>
-
-        {maintenanceList.length === 0 ? (
-          <p className="text-xs text-slate-400 py-8 text-center">No maintenance issues reported.</p>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-xs border-collapse">
-              <thead>
-                <tr className="bg-slate-100/70 border-b border-slate-200 text-slate-500 font-bold uppercase text-[10px] tracking-wider">
-                  <th className="py-3 px-3">Ticket ID</th>
-                  <th className="py-3 px-3">Seat</th>
-                  <th className="py-3 px-3">Category</th>
-                  <th className="py-3 px-3">Description</th>
-                  <th className="py-3 px-3">Priority</th>
-                  <th className="py-3 px-3">Status</th>
-                  <th className="py-3 px-3">Actions</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100 font-mono">
-                {maintenanceList.map(t => (
-                  <tr key={t.id} className="hover:bg-slate-50 text-slate-700">
-                    <td className="py-3 px-3 font-bold text-navy">{t.id}</td>
-                    <td className="py-3 px-3 text-teal-600 font-bold">{t.seatNumber}</td>
-                    <td className="py-3 px-3 text-slate-800 font-sans font-medium">{t.category}</td>
-                    <td className="py-3 px-3 text-slate-500 font-sans max-w-xs truncate">{t.description}</td>
-                    <td className="py-3 px-3">
-                      <Badge className={`text-[10px] font-bold ${
-                        t.priority === 'High' ? 'bg-red-600 text-white' :
-                        t.priority === 'Medium' ? 'bg-amber-600 text-white' :
-                        'bg-slate-500 text-white'
-                      }`}>
-                        {t.priority}
-                      </Badge>
-                    </td>
-                    <td className="py-3 px-3">
-                      <Badge className={`text-[10px] font-bold ${
-                        t.status === 'Resolved' ? 'bg-emerald-600 text-white' :
-                        t.status === 'In progress' ? 'bg-brandBlue text-white' :
-                        'bg-amber-600 text-white'
-                      }`}>
-                        {t.status}
-                      </Badge>
-                    </td>
-                    <td className="py-3 px-3">
-                      {t.status !== 'Resolved' && (
-                        <Button
-                          onClick={() => handleUpdateStatus(t.id, 'Resolved')}
-                          className="h-7 px-2.5 text-[10px] bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-lg"
-                        >
-                          Mark Resolved
-                        </Button>
-                      )}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
+      {/* SEARCH BAR CARD */}
+      <Card className="border border-slate-200 bg-white rounded-2xl p-4 shadow-xs">
+        <div className="relative max-w-md">
+          <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+          <Input
+            type="text"
+            placeholder="Search seat number, type..."
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            className="pl-9 h-10 text-xs rounded-xl border-slate-300 text-navy"
+          />
+        </div>
       </Card>
 
-      {/* REPORT MODAL */}
-      {isReportModalOpen && (
-        <Dialog open={isReportModalOpen} onOpenChange={setIsReportModalOpen}>
-          <DialogContent className="max-w-md bg-white border border-slate-200 text-navy p-6 rounded-2xl space-y-4 shadow-2xl">
-            <DialogHeader className="space-y-1">
-              <DialogTitle className="text-lg font-black text-navy flex items-center gap-2">
-                <Wrench className="text-teal-600" size={20} /> Report Damaged Seat
-              </DialogTitle>
-              <DialogDescription className="text-xs text-slate-500 font-medium">
-                Submit an issue report to temporarily disable seat for new bookings.
-              </DialogDescription>
-            </DialogHeader>
-
-            <form onSubmit={handleReportMaintenance} className="space-y-4">
-              <div className="space-y-1.5">
-                <label className="text-xs font-bold text-slate-700 block">Select Seat Number</label>
-                <select
-                  value={seatNumber}
-                  onChange={(e) => setSeatNumber(e.target.value)}
-                  className="w-full h-10 bg-slate-50 border border-slate-300 text-navy text-xs font-medium rounded-xl px-3 focus:border-teal-600"
-                >
-                  <option value="">-- Choose Seat --</option>
-                  {seats.map(s => (
-                    <option key={s.id} value={s.seatNumber}>Seat {s.seatNumber} ({s.floorName || 'Ground Floor'})</option>
+      {/* SEATS INVENTORY TABLE */}
+      <Card className="border border-slate-200 rounded-2xl shadow-xs overflow-hidden bg-white">
+        <CardContent className="p-0">
+          {loading ? (
+            <div className="p-8 text-center text-xs text-slate-400">Loading seat inventory...</div>
+          ) : filtered.length === 0 ? (
+            <div className="p-8 text-center text-xs text-slate-400">No seats found.</div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-left border-collapse text-xs">
+                <thead>
+                  <tr className="bg-slate-100/70 border-b border-slate-200 text-slate-500 font-bold uppercase text-[10px] tracking-wider">
+                    <th className="p-3.5">Seat Number</th>
+                    <th className="p-3.5">Zone / Type</th>
+                    <th className="p-3.5">Power Outlet</th>
+                    <th className="p-3.5">Near Window</th>
+                    <th className="p-3.5">Status</th>
+                    <th className="p-3.5 text-right">Action</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 font-mono">
+                  {filtered.map(s => (
+                    <tr key={s.id} className="hover:bg-slate-50 transition-colors">
+                      <td className="p-3.5 font-bold text-navy">{s.seatNumber}</td>
+                      <td className="p-3.5 font-semibold text-slate-700 font-sans">{s.type}</td>
+                      <td className="p-3.5 font-sans">
+                        {s.powerOutlet ? <span className="text-emerald-700 font-bold flex items-center gap-1"><Zap size={13} /> Yes</span> : <span className="text-slate-400">No</span>}
+                      </td>
+                      <td className="p-3.5 font-sans">
+                        {s.nearWindow ? <span className="text-amber-700 font-bold flex items-center gap-1"><Sun size={13} /> Yes</span> : <span className="text-slate-400">No</span>}
+                      </td>
+                      <td className="p-3.5">
+                        <Badge className={`text-[10px] font-bold ${s.status === 'active' || s.status === 'available' ? 'bg-emerald-600 text-white' : 'bg-amber-600 text-white'}`}>
+                          {s.status}
+                        </Badge>
+                      </td>
+                      <td className="p-3.5 text-right font-sans">
+                        <Button
+                          onClick={() => handleToggleMaintenance(s)}
+                          variant="outline"
+                          className="h-7 text-[11px] font-bold rounded-lg border-slate-300 text-slate-700 hover:bg-slate-100"
+                        >
+                          {s.status === 'active' || s.status === 'available' ? 'Set Maintenance' : 'Activate'}
+                        </Button>
+                      </td>
+                    </tr>
                   ))}
-                </select>
-              </div>
+                </tbody>
+              </table>
+            </div>
+          )}
+        </CardContent>
+      </Card>
 
-              <div className="space-y-1.5">
-                <label className="text-xs font-bold text-slate-700 block">Issue Category</label>
-                <select
-                  value={category}
-                  onChange={(e) => setCategory(e.target.value)}
-                  className="w-full h-10 bg-slate-50 border border-slate-300 text-navy text-xs font-medium rounded-xl px-3 focus:border-teal-600"
-                >
-                  <option value="Broken Frame / Cushion">Broken Frame / Cushion</option>
-                  <option value="Power Outlet Defective">Power Outlet Defective</option>
-                  <option value="Desk Surface Scratched / Damaged">Desk Surface Scratched / Damaged</option>
-                  <option value="Reading Lamp Faulty">Reading Lamp Faulty</option>
-                  <option value="Other">Other Operational Damage</option>
-                </select>
-              </div>
+      {/* ADD NEW SEAT MODAL */}
+      <Dialog open={addModalOpen} onOpenChange={setAddModalOpen}>
+        <DialogContent className="sm:max-w-md rounded-2xl p-6 bg-white text-navy">
+          <DialogHeader>
+            <DialogTitle className="text-lg font-bold text-navy flex items-center gap-2">
+              <Plus size={20} className="text-teal-600" /> Add New Study Seat
+            </DialogTitle>
+            <DialogDescription className="text-xs text-slate-500 pt-1">
+              Add a new carrel seat to Ground Floor inventory.
+            </DialogDescription>
+          </DialogHeader>
 
-              <div className="space-y-1.5">
-                <label className="text-xs font-bold text-slate-700 block">Description</label>
-                <Input
-                  type="text"
-                  placeholder="e.g., Cushion torn, power port loose..."
-                  value={description}
-                  onChange={(e) => setDescription(e.target.value)}
-                  className="h-10 bg-slate-50 border-slate-300 text-navy text-xs rounded-xl"
-                />
-              </div>
+          <form onSubmit={handleAddSeat} className="space-y-4 pt-2">
+            <div className="space-y-1.5">
+              <Label className="text-xs font-bold text-slate-700">Seat Number / Code</Label>
+              <Input
+                placeholder="e.g. S-41"
+                value={newSeat.seatNumber}
+                onChange={(e) => setNewSeat({ ...newSeat, seatNumber: e.target.value })}
+                className="h-10 text-xs font-bold bg-slate-50 border-slate-300 text-navy"
+                required
+              />
+            </div>
 
-              <div className="grid grid-cols-2 gap-3">
-                <div className="space-y-1.5">
-                  <label className="text-xs font-bold text-slate-700 block">Priority</label>
-                  <select
-                    value={priority}
-                    onChange={(e) => setPriority(e.target.value)}
-                    className="w-full h-10 bg-slate-50 border border-slate-300 text-navy text-xs font-medium rounded-xl px-3"
-                  >
-                    <option value="Low">Low</option>
-                    <option value="Medium">Medium</option>
-                    <option value="High">High (Urgent)</option>
-                  </select>
-                </div>
-                <div className="space-y-1.5">
-                  <label className="text-xs font-bold text-slate-700 block">Resolution Timeline</label>
-                  <select
-                    value={expectedResolution}
-                    onChange={(e) => setExpectedResolution(e.target.value)}
-                    className="w-full h-10 bg-slate-50 border border-slate-300 text-navy text-xs font-medium rounded-xl px-3"
-                  >
-                    <option value="Within 24 Hours">Within 24 Hours</option>
-                    <option value="Within 48 Hours">Within 48 Hours</option>
-                    <option value="1 Week">1 Week</option>
-                  </select>
-                </div>
-              </div>
-
-              <Button
-                type="submit"
-                disabled={loading}
-                className="w-full h-11 bg-teal-600 hover:bg-teal-700 text-white font-bold text-xs rounded-xl shadow-xs mt-2"
+            <div className="space-y-1.5">
+              <Label className="text-xs font-bold text-slate-700">Zone Type</Label>
+              <select
+                value={newSeat.zoneId}
+                onChange={(e) => setNewSeat({ ...newSeat, zoneId: e.target.value })}
+                className="w-full h-10 rounded-xl border border-slate-300 px-3 text-xs font-semibold bg-slate-50 text-navy"
               >
-                {loading ? 'Submitting...' : 'Submit Report & Flag Seat →'}
+                <option value="zone-a">Quiet Study (Zone A)</option>
+                <option value="zone-b">Group Discussion (Zone B)</option>
+              </select>
+            </div>
+
+            <div className="flex justify-end gap-3 pt-3">
+              <Button type="button" variant="outline" onClick={() => setAddModalOpen(false)} className="rounded-xl text-xs">
+                Cancel
               </Button>
-            </form>
-          </DialogContent>
-        </Dialog>
-      )}
+              <Button type="submit" className="bg-teal-600 hover:bg-teal-700 text-white font-bold rounded-xl text-xs">
+                Create Seat
+              </Button>
+            </div>
+          </form>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
