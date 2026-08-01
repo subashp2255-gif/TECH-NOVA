@@ -4,6 +4,8 @@ import { fileURLToPath, URL } from 'node:url';
 
 export default defineConfig({
   plugins: [react()],
+  // base: '/' for Vercel (root domain).
+  // For GitHub Pages, set VITE_BASE_PATH=/TECH-NOVA/ in the CI environment.
   base: process.env.VITE_BASE_PATH || '/',
   resolve: {
     alias: {
