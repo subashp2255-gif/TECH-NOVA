@@ -10,7 +10,7 @@ import { Badge } from '../../components/shared/Badge';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '../../components/shared/Dialog';
 import { format } from 'date-fns';
 import { 
-  Calendar, Clock, CheckCircle2, AlertTriangle, ArrowRight, ShieldCheck, MapPin, Search, Users, Sparkles, Filter, ChevronRight
+  Calendar, Clock, CheckCircle2, AlertTriangle, AlertCircle, ArrowRight, ShieldCheck, MapPin, Search, Users, Sparkles, Filter, ChevronRight
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import WaitlistModal from '../../components/student/WaitlistModal';
