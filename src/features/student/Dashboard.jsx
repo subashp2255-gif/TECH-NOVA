@@ -137,7 +137,7 @@ export default function Dashboard() {
             const [userStats, libData, slotsData, seatsData] = await Promise.all([
                 dashboardService.getStudentStats(user.id),
                 dashboardService.getLibraryInfo(),
-                bookingService.getSlotsAvailability(tomorrowDateStr),
+                bookingService.getSlotsAvailability(tomorrowDateStr, user.id),
                 db.read('seatsync_seats').catch(() => [])
             ]);
 
@@ -735,10 +735,14 @@ export default function Dashboard() {
                                 const summary = waitlistSummaries[slot.id] || {};
                                 const isStudentWaiting = !isSlotCancelled && summary.isStudentWaiting;
 
+                                const isAlreadyBooked = slot.isBookedByStudent;
+
                                 return (
                                     <Card key={slot.id} className={`transition-all border-2 rounded-xl ${
                                         isSlotCancelled
                                             ? 'border-red-200 bg-red-50/20 opacity-90'
+                                            : isAlreadyBooked
+                                            ? 'border-emerald-500 bg-emerald-50/20'
                                             : isFullyBooked
                                             ? isStudentWaiting ? 'border-amber-400/80 bg-amber-50/20' : 'border-red-200'
                                             : 'border-slate-200/90 hover:border-brandBlue/50 hover:shadow-md bg-white'
@@ -750,7 +754,11 @@ export default function Dashboard() {
                                                         <Badge variant="outline" className="text-[10px] uppercase font-extrabold tracking-wider bg-slate-50">
                                                             1h Slot
                                                         </Badge>
-                                                        {isStudentWaiting && (
+                                                        {isAlreadyBooked ? (
+                                                            <Badge className="bg-emerald-600 text-white font-bold text-[10px]">
+                                                                Your Booking
+                                                            </Badge>
+                                                        ) : isStudentWaiting && (
                                                             <Badge className="bg-amber-100 text-amber-800 border-amber-300 font-bold text-[10px]">
                                                                 Waitlisted
                                                             </Badge>
@@ -759,8 +767,8 @@ export default function Dashboard() {
                                                     <h3 className="text-sm font-bold text-navy">{slot.label}</h3>
                                                     <p className="text-[10px] text-slate-500 font-mono font-semibold">{slot.startTime} – {slot.endTime}</p>
                                                 </div>
-                                                <Badge className={`text-xs px-2.5 py-0.5 font-bold ${isSlotCancelled ? 'bg-red-100 text-red-800 border-red-300' : isFullyBooked ? 'bg-red-100 text-red-800 border-red-300' : 'bg-emerald-100 text-emerald-800 border-emerald-300'}`}>
-                                                    {isSlotCancelled ? 'Cancelled' : status.text}
+                                                <Badge className={`text-xs px-2.5 py-0.5 font-bold ${isSlotCancelled ? 'bg-red-100 text-red-800 border-red-300' : isAlreadyBooked ? 'bg-emerald-600 text-white' : isFullyBooked ? 'bg-red-100 text-red-800 border-red-300' : 'bg-emerald-100 text-emerald-800 border-emerald-300'}`}>
+                                                    {isSlotCancelled ? 'Cancelled' : isAlreadyBooked ? 'Reserved' : status.text}
                                                 </Badge>
                                             </div>
 

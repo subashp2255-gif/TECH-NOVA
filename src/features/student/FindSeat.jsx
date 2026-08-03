@@ -66,7 +66,7 @@ export default function FindSeat() {
     try {
       setLoadingSlots(true);
       const [slotsData, floorsData] = await Promise.all([
-        bookingService.getSlotsAvailability(tomorrowDate),
+        bookingService.getSlotsAvailability(tomorrowDate, user?.id),
         bookingService.getFloors()
       ]);
       setSlots(slotsData);
@@ -84,7 +84,7 @@ export default function FindSeat() {
 
   useEffect(() => {
     fetchInitialData();
-  }, []);
+  }, [user?.id]);
 
   useSync((event) => {
     if (event?.type === 'storage_change' || event?.type?.startsWith('WAITLIST_')) {
@@ -288,11 +288,17 @@ export default function FindSeat() {
                 const isStudentWaiting = !isSlotCancelled && summary.isStudentWaiting;
                 const isMorning = index < 4;
 
+                const isAlreadyBooked = slot.isBookedByStudent;
+
                 return (
                   <Card
                     key={slot.id}
                     onClick={() => {
                       if (isSlotCancelled) return;
+                      if (isAlreadyBooked) {
+                        toast.error('You already have an active reservation for this time slot.');
+                        return;
+                      }
                       if (isFullyBooked) {
                         if (isStudentWaiting) handleViewWaitingList(null, slot);
                         else handleJoinWaitingList(null, slot);
@@ -303,6 +309,8 @@ export default function FindSeat() {
                     className={`transition-all border-2 rounded-xl p-3.5 ${
                       isSlotCancelled
                         ? 'border-red-200 bg-red-50/20 cursor-not-allowed opacity-90'
+                        : isAlreadyBooked
+                        ? 'border-emerald-500 bg-emerald-50/30 cursor-pointer shadow-xs'
                         : isFullyBooked
                         ? isStudentWaiting ? 'border-amber-400 bg-amber-50/20 cursor-pointer' : 'border-red-200 bg-slate-50/40 cursor-pointer'
                         : 'border-slate-200 hover:border-brandBlue/50 hover:shadow-md bg-white cursor-pointer'
@@ -313,9 +321,15 @@ export default function FindSeat() {
                         <Badge variant="outline" className="text-[10px] font-bold uppercase bg-slate-50">
                           {isMorning ? 'Morning' : 'Afternoon'}
                         </Badge>
-                        <Badge variant="outline" className={`text-[10px] ${status.badgeClass}`}>
-                          {isSlotCancelled ? 'Cancelled by Library' : status.label}
-                        </Badge>
+                        {isAlreadyBooked ? (
+                          <Badge className="bg-emerald-600 text-white font-bold text-[10px]">
+                            Your Booking
+                          </Badge>
+                        ) : (
+                          <Badge variant="outline" className={`text-[10px] ${status.badgeClass}`}>
+                            {isSlotCancelled ? 'Cancelled by Library' : status.label}
+                          </Badge>
+                        )}
                       </div>
 
                       <div>
@@ -333,6 +347,12 @@ export default function FindSeat() {
                           {slot.disabledReason && (
                             <p className="text-[9.5px] font-medium text-slate-600">Reason: {slot.disabledReason}</p>
                           )}
+                        </div>
+                      ) : isAlreadyBooked ? (
+                        <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-2 flex items-center justify-between text-[10px]">
+                          <span className="font-bold text-emerald-900 flex items-center gap-1">
+                            <CheckCircle2 size={12} className="text-emerald-600" /> Reserved by You
+                          </span>
                         </div>
                       ) : isStudentWaiting ? (
                         <div className="bg-amber-50 border border-amber-200 rounded-lg p-2 flex items-center justify-between text-[10px]">
@@ -357,12 +377,14 @@ export default function FindSeat() {
 
                       <Button
                         type="button"
-                        disabled={isSlotCancelled}
-                        aria-disabled={isSlotCancelled}
-                        variant={isSlotCancelled ? "outline" : isFullyBooked ? (isStudentWaiting ? "secondary" : "outline") : "default"}
+                        disabled={isSlotCancelled || isAlreadyBooked}
+                        aria-disabled={isSlotCancelled || isAlreadyBooked}
+                        variant={isSlotCancelled ? "outline" : isAlreadyBooked ? "secondary" : isFullyBooked ? (isStudentWaiting ? "secondary" : "outline") : "default"}
                         className={`w-full h-9 text-xs font-bold rounded-lg ${
                           isSlotCancelled
                             ? 'bg-slate-100 text-slate-400 border-slate-200 cursor-not-allowed'
+                            : isAlreadyBooked
+                            ? 'bg-emerald-100 text-emerald-900 border-emerald-300 cursor-not-allowed'
                             : isFullyBooked
                             ? isStudentWaiting ? 'bg-amber-100 text-amber-900 border-amber-300' : 'border-red-300 text-red-700 hover:bg-red-50'
                             : 'bg-brandBlue text-white'
@@ -370,6 +392,8 @@ export default function FindSeat() {
                       >
                         {isSlotCancelled
                           ? 'Slot Cancelled'
+                          : isAlreadyBooked
+                          ? 'Already Reserved'
                           : isFullyBooked
                           ? isStudentWaiting ? 'View Waiting Status' : 'Join Waiting List'
                           : 'Select Seat'}

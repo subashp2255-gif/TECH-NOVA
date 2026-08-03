@@ -24,7 +24,7 @@ export const bookingService = {
     return floors;
   },
 
-  async getSlotsAvailability(dateStr) {
+  async getSlotsAvailability(dateStr, studentId = null) {
     let sourceSlots = [];
     let sourceSeats = [];
     let sourceBookings = [];
@@ -94,8 +94,13 @@ export const bookingService = {
 
         return (bSlotId === slotId || bSlotId === slot.name || bSlotId === slot.label) &&
           (bDate === dateStr) &&
-          ['confirmed', 'awaiting_check_in', 'checked_in', 'active'].includes(bStatus);
+          ['confirmed', 'awaiting_check_in', 'checked_in', 'active', 'checkout_pending'].includes(bStatus);
       });
+
+      const isBookedByStudent = studentId ? slotBookings.some(b => {
+        const bStudentId = b.student_id || b.studentId;
+        return String(bStudentId) === String(studentId);
+      }) : false;
 
       const bookedCount = slotBookings.length;
       const availableCount = isDisabledByAdmin ? 0 : Math.max(0, activeSeatsCount - bookedCount);
@@ -110,10 +115,50 @@ export const bookingService = {
         bookedCount,
         availableCount,
         isFullyBooked: availableCount === 0,
+        isBookedByStudent,
         isDisabledByAdmin,
         disabledReason: disabledRecord ? disabledRecord.reason : (slot.cancellation_reason || null)
       };
     });
+  },
+
+  async getMyBookings(studentId) {
+    if (!studentId) return [];
+
+    try {
+      const { data, error } = await supabase
+        .from('bookings')
+        .select('*')
+        .eq('student_id', studentId)
+        .order('created_at', { ascending: false });
+
+      if (!error && data && data.length > 0) {
+        return data.map(b => ({
+          id: b.id,
+          bookingCode: b.booking_code,
+          studentId: b.student_id,
+          studentName: b.student_name,
+          studentEmail: b.student_email,
+          collegeId: b.college_id,
+          bookingDate: b.booking_date,
+          slotId: b.slot_id,
+          slotTime: b.slot_time || `${b.start_time || ''} – ${b.end_time || ''}`,
+          floorId: b.floor_id,
+          floorName: b.floor_name || 'Ground Floor',
+          seatId: b.seat_id,
+          seatNumber: b.seat_number || b.seat_id,
+          status: b.status,
+          cancellationReason: b.cancellation_reason,
+          createdAt: b.created_at
+        }));
+      }
+    } catch { /* fallback */ }
+
+    // Local fallback
+    const bookings = (await db.read('seatsync_bookings')) || [];
+    return bookings
+      .filter(b => String(b.studentId || b.student_id) === String(studentId))
+      .sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
   },
 
   async getSeatsForSlot(floorId, dateStr, slotId) {
@@ -126,7 +171,7 @@ export const bookingService = {
       if (seats && seats.length > 0) {
         const activeBookings = (bookings || []).filter(b => 
           (b.slot_id === slotId || b.slotId === slotId) &&
-          ['confirmed', 'awaiting_check_in', 'checked_in'].includes(b.status)
+          ['confirmed', 'awaiting_check_in', 'checked_in', 'active', 'checkout_pending'].includes(String(b.status || '').toLowerCase())
         );
         const bookedSeatIds = new Set(activeBookings.map(b => b.seat_id || b.seatId));
 
@@ -148,10 +193,10 @@ export const bookingService = {
 
     const activeBookings = bookings.filter(b => 
       b.bookingDate === dateStr &&
-      b.slotId === slotId &&
-      !['cancelled', 'CANCELLED_BY_STUDENT', 'CANCELLED_BY_ADMIN', 'slot_cancelled'].includes(b.status)
+      (b.slotId === slotId || b.slot_id === slotId) &&
+      !['cancelled', 'cancelled_by_student', 'cancelled_by_admin', 'slot_cancelled'].includes(String(b.status || '').toLowerCase())
     );
-    const bookedSeatIds = new Set(activeBookings.map(b => b.seatId));
+    const bookedSeatIds = new Set(activeBookings.map(b => b.seatId || b.seat_id));
 
     return seats.map(s => ({
       ...s,
@@ -161,6 +206,10 @@ export const bookingService = {
   },
 
   async createBooking(user, dateStr, slot, floorId, seatId) {
+    if (!user || !user.id) {
+      throw new Error('User authentication required.');
+    }
+
     try {
       const { data: result, error } = await supabase.rpc('create_booking', {
         p_student_id: user.id,
@@ -181,8 +230,43 @@ export const bookingService = {
       }
     }
 
-    // Local fallback creation
+    // Local fallback creation with strict validation
     const bookings = (await db.read('seatsync_bookings')) || [];
+
+    // Check 1: Does student ALREADY have an active booking in this slot for this date?
+    const existingStudentBooking = bookings.find(b => {
+      const bStudentId = b.studentId || b.student_id;
+      const bSlotId = b.slotId || b.slot_id;
+      const bDate = b.bookingDate || b.booking_date;
+      const bStatus = String(b.status || '').toLowerCase();
+
+      return String(bStudentId) === String(user.id) &&
+        (bSlotId === slot.id || bSlotId === slot.name) &&
+        bDate === dateStr &&
+        !['cancelled', 'cancelled_by_student', 'cancelled_by_admin', 'slot_cancelled'].includes(bStatus);
+    });
+
+    if (existingStudentBooking) {
+      throw new Error('You already have an active reservation for this time slot.');
+    }
+
+    // Check 2: Is this seat ALREADY reserved by anyone in this slot for this date?
+    const existingSeatBooking = bookings.find(b => {
+      const bSeatId = b.seatId || b.seat_id;
+      const bSlotId = b.slotId || b.slot_id;
+      const bDate = b.bookingDate || b.booking_date;
+      const bStatus = String(b.status || '').toLowerCase();
+
+      return (bSeatId === seatId) &&
+        (bSlotId === slot.id || bSlotId === slot.name) &&
+        bDate === dateStr &&
+        !['cancelled', 'cancelled_by_student', 'cancelled_by_admin', 'slot_cancelled'].includes(bStatus);
+    });
+
+    if (existingSeatBooking) {
+      throw new Error('This seat is already reserved for this time slot.');
+    }
+
     const seats = (await db.read('seatsync_seats')) || [];
     const targetSeat = seats.find(s => s.id === seatId) || { seatNumber: 'A-101' };
 
@@ -192,14 +276,14 @@ export const bookingService = {
       studentId: user.id,
       studentName: user.name,
       studentEmail: user.email,
-      collegeId: user.collegeId || user.registrationNumber || '2024CSE001',
+      collegeId: user.collegeId || user.registrationNumber || '24AD042',
       bookingDate: dateStr,
       slotId: slot.id,
       slotTime: `${slot.startTime} – ${slot.endTime}`,
       floorId,
       floorName: 'Ground Floor',
       seatId,
-      seatNumber: targetSeat.seatNumber || 'A-101',
+      seatNumber: targetSeat.seatNumber || targetSeat.seat_number || 'A-101',
       status: 'confirmed',
       createdAt: new Date().toISOString()
     };
@@ -223,7 +307,7 @@ export const bookingService = {
     } catch { /* fallback */ }
 
     const bookings = (await db.read('seatsync_bookings')) || [];
-    const target = bookings.find(b => b.id === bookingId && b.studentId === studentId);
+    const target = bookings.find(b => b.id === bookingId && String(b.studentId || b.student_id) === String(studentId));
 
     if (!target) {
       throw new Error('Booking not found or not owned by student.');
