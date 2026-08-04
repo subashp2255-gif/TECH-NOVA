@@ -4,6 +4,10 @@ import { ROLES, defaultUsers } from '../data/seedData';
 
 export function parseErrorMessage(err, fallbackMsg = 'An unexpected error occurred. Please try again.') {
   if (!err) return fallbackMsg;
+  const str = typeof err === 'string' ? err : (err.message || err.error_description || err.msg || '');
+  if (str.toLowerCase().includes('rate limit') || str.toLowerCase().includes('over_email_send_rate_limit')) {
+    return 'Email rate limit reached (Supabase limits 3 emails/hr on default SMTP). Please wait a few minutes or disable email confirmation in Supabase Dashboard.';
+  }
   if (typeof err === 'string') {
     const trimmed = err.trim();
     if (trimmed && trimmed !== '{}' && trimmed !== '[object Object]') return trimmed;
