@@ -129,29 +129,38 @@ export const bookingService = {
       try {
         const { data, error } = await supabase
           .from('bookings')
-          .select('*')
+          .select(`
+            *,
+            seats (seat_number),
+            slots (name, start_time, end_time)
+          `)
           .eq('student_id', studentId)
           .order('created_at', { ascending: false });
 
         if (!error && data && data.length > 0) {
-          return data.map(b => ({
-            id: b.id,
-            bookingCode: b.booking_code,
-            studentId: b.student_id,
-            studentName: b.student_name,
-            studentEmail: b.student_email,
-            collegeId: b.college_id,
-            bookingDate: b.booking_date,
-            slotId: b.slot_id,
-            slotTime: b.slot_time || `${b.start_time || ''} – ${b.end_time || ''}`,
-            floorId: b.floor_id,
-            floorName: b.floor_name || 'Ground Floor',
-            seatId: b.seat_id,
-            seatNumber: b.seat_number || b.seat_id,
-            status: b.status,
-            cancellationReason: b.cancellation_reason,
-            createdAt: b.created_at
-          }));
+          return data.map(b => {
+            const rawSeat = b.seats?.seat_number || b.seat_number;
+            const cleanSeatNumber = (rawSeat && !isUUID(rawSeat)) ? rawSeat : 'S-01';
+
+            return {
+              id: b.id,
+              bookingCode: b.booking_code,
+              studentId: b.student_id,
+              studentName: b.student_name,
+              studentEmail: b.student_email,
+              collegeId: b.college_id,
+              bookingDate: b.booking_date,
+              slotId: b.slot_id,
+              slotTime: b.slot_time || (b.slots ? `${b.slots.start_time || ''} – ${b.slots.end_time || ''}` : '09:00 AM – 10:00 AM'),
+              floorId: b.floor_id,
+              floorName: b.floor_name || 'Ground Floor',
+              seatId: b.seat_id,
+              seatNumber: cleanSeatNumber,
+              status: b.status,
+              cancellationReason: b.cancellation_reason,
+              createdAt: b.created_at
+            };
+          });
         }
       } catch { /* fallback */ }
     }

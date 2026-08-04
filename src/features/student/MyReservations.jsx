@@ -560,7 +560,7 @@ export default function MyReservations() {
                       <div>
                         <span className="text-slate-400 font-semibold block text-[10px] uppercase tracking-wider">Seat Number</span>
                         <span className="font-black text-navy text-base flex items-center gap-1.5">
-                          <MapPin size={16} className="text-brandBlue" /> {booking.seatNumber || 'A-101'}
+                          <MapPin size={16} className="text-brandBlue" /> {booking.seatNumber || 'S-01'}
                         </span>
                       </div>
 
