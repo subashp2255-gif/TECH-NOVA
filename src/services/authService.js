@@ -293,18 +293,16 @@ export const authService = {
 
       if (authError) {
         console.warn('Supabase auth sign up warning:', authError.message || authError);
-      } else if (authData?.user) {
-        await supabase.from('profiles').upsert({
-          id: authData.user.id,
-          full_name: fullName.trim(),
-          email: cleanEmail,
-          registration_number: cleanRegNo,
-          login_identifier: cleanEmail,
-          department,
-          year_of_study: yearOfStudy,
-          role: 'student',
-          status: 'active'
-        });
+      } else if (authData?.user && authData?.session) {
+        // If an active session exists, update profile if needed
+        try {
+          await supabase.from('profiles').update({
+            full_name: fullName.trim(),
+            registration_number: cleanRegNo,
+            department,
+            year_of_study: yearOfStudy
+          }).eq('id', authData.user.id);
+        } catch { /* trigger already created profile */ }
       }
     } catch (supaErr) {
       console.warn('Supabase connection error (proceeding with local registration):', supaErr);
