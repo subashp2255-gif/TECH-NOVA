@@ -338,6 +338,32 @@ export const authService = {
     return true;
   },
 
+  async resendConfirmationEmail(identifier) {
+    const cleanId = String(identifier || '').trim();
+    let targetEmail = cleanId.toLowerCase();
+
+    if (!cleanId.includes('@')) {
+      try {
+        const { data: resolvedEmail } = await supabase
+          .rpc('fn_get_auth_email_by_identifier', { p_identifier: cleanId });
+
+        if (resolvedEmail && resolvedEmail.length > 0 && resolvedEmail[0].auth_email) {
+          targetEmail = resolvedEmail[0].auth_email;
+        }
+      } catch { /* proceed */ }
+    }
+
+    const { data, error } = await supabase.auth.resend({
+      type: 'signup',
+      email: targetEmail
+    });
+
+    if (error) {
+      throw new Error(parseErrorMessage(error, 'Failed to resend confirmation email.'));
+    }
+    return data;
+  },
+
   async updatePassword(newPassword) {
     const { data, error } = await supabase.auth.updateUser({
       password: newPassword
