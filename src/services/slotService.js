@@ -1,8 +1,47 @@
-import { supabase } from '../lib/supabase';
+import { supabase, isUUID } from '../lib/supabase';
 import { db } from './mockDatabase';
 import { notificationService } from './notificationService';
 
 export const slotService = {
+  async getSlotByCode(slotCode) {
+    if (!slotCode) return null;
+    try {
+      if (isUUID(slotCode)) {
+        return this.getSlotById(slotCode);
+      }
+      const { data, error } = await supabase
+        .from('slots')
+        .select('*')
+        .eq('slot_code', slotCode)
+        .maybeSingle();
+
+      if (!error && data) return data;
+    } catch { /* fallback */ }
+
+    // Local fallback
+    const localSlots = (await db.read('seatsync_slots')) || [];
+    return localSlots.find(s => s.id === slotCode || s.slot_code === slotCode || s.code === slotCode) || null;
+  },
+
+  async getSlotById(slotId) {
+    if (!slotId) return null;
+    try {
+      if (isUUID(slotId)) {
+        const { data, error } = await supabase
+          .from('slots')
+          .select('*')
+          .eq('id', slotId)
+          .maybeSingle();
+        if (!error && data) return data;
+      } else {
+        return this.getSlotByCode(slotId);
+      }
+    } catch { /* fallback */ }
+
+    const localSlots = (await db.read('seatsync_slots')) || [];
+    return localSlots.find(s => s.id === slotId || s.slot_code === slotId) || null;
+  },
+
   async getDisabledOccurrences() {
     try {
       const { data, error } = await supabase.from('slots').select('*').eq('status', 'disabled');
@@ -20,19 +59,27 @@ export const slotService = {
   },
 
   async getDisabledState(slotId, dateStr) {
-    try {
-      const { data, error } = await supabase.from('slots').select('*').eq('id', slotId).single();
-      if (!error && data && (data.status === 'disabled' || data.status === 'cancelled')) {
-        return {
-          slotId: data.id,
-          reason: data.cancellation_reason || 'Slot disabled by library'
-        };
-      }
-    } catch { /* fallback */ }
+    let resolvedSlotId = slotId;
+    if (slotId && !isUUID(slotId)) {
+      const slotRow = await this.getSlotByCode(slotId);
+      if (slotRow?.id) resolvedSlotId = slotRow.id;
+    }
+
+    if (isUUID(resolvedSlotId)) {
+      try {
+        const { data, error } = await supabase.from('slots').select('*').eq('id', resolvedSlotId).maybeSingle();
+        if (!error && data && (data.status === 'disabled' || data.status === 'cancelled')) {
+          return {
+            slotId: data.id,
+            reason: data.cancellation_reason || 'Slot disabled by library'
+          };
+        }
+      } catch { /* fallback */ }
+    }
 
     const disabledList = (await db.read('seatsync_disabled_slots')) || [];
     return disabledList.find(d => 
-      d.slotId === slotId && 
+      (d.slotId === slotId || d.slotId === resolvedSlotId) && 
       (d.scope === 'ALL_FUTURE' || d.date === dateStr || (d.startDate <= dateStr && d.endDate >= dateStr))
     );
   },

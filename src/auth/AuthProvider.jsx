@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
-import { supabase } from '../lib/supabase';
+import { supabase, isUUID } from '../lib/supabase';
 import { authService } from '../services/authService';
 import { useSync } from '../hooks/useSync';
 import toast from 'react-hot-toast';
@@ -27,7 +27,7 @@ export const AuthProvider = ({ children }) => {
     setLoading(false);
 
     const { data: authListener } = supabase.auth.onAuthStateChange(async (event, session) => {
-      if (session?.user) {
+      if (session?.user?.id && isUUID(session.user.id)) {
         const { data: profile } = await supabase
           .from('profiles')
           .select('*')
@@ -56,7 +56,7 @@ export const AuthProvider = ({ children }) => {
 
   // Realtime subscription to profiles table for live ejection on admin block/suspend
   useEffect(() => {
-    if (!user?.id) return;
+    if (!user?.id || !isUUID(user.id)) return;
 
     const profileChannel = supabase
       .channel(`profile-eject-${user.id}`)

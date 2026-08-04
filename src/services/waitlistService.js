@@ -1,4 +1,4 @@
-import { supabase } from '../lib/supabase';
+import { supabase, isUUID } from '../lib/supabase';
 import { db } from './mockDatabase';
 import { notificationService } from './notificationService';
 import { slotService } from './slotService';
@@ -6,35 +6,37 @@ import { bookingService } from './bookingService';
 
 export const waitlistService = {
   async getStudentWaitlistEntries(studentId) {
-    try {
-      const { data, error } = await supabase
-        .from('waitlist_entries')
-        .select(`
-          id,
-          booking_date,
-          status,
-          queue_position,
-          created_at,
-          slots (id, name, start_time, end_time)
-        `)
-        .eq('student_id', studentId)
-        .eq('status', 'waiting')
-        .order('created_at', { ascending: true });
+    if (isUUID(studentId)) {
+      try {
+        const { data, error } = await supabase
+          .from('waitlist_entries')
+          .select(`
+            id,
+            booking_date,
+            status,
+            queue_position,
+            created_at,
+            slots (id, name, start_time, end_time)
+          `)
+          .eq('student_id', studentId)
+          .eq('status', 'waiting')
+          .order('created_at', { ascending: true });
 
-      if (!error && data) {
-        return data.map(w => ({
-          id: w.id,
-          dateStr: w.booking_date,
-          status: w.status,
-          queuePosition: w.queue_position,
-          slot: w.slots ? {
-            id: w.slots.id,
-            name: w.slots.name,
-            label: w.slots.name
-          } : null
-        }));
-      }
-    } catch { /* fallback */ }
+        if (!error && data) {
+          return data.map(w => ({
+            id: w.id,
+            dateStr: w.booking_date,
+            status: w.status,
+            queuePosition: w.queue_position,
+            slot: w.slots ? {
+              id: w.slots.id,
+              name: w.slots.name,
+              label: w.slots.name
+            } : null
+          }));
+        }
+      } catch { /* fallback */ }
+    }
 
     const list = (await db.read('seatsync_waitlist')) || [];
     const slots = (await db.read('seatsync_slots')) || [];
@@ -63,39 +65,41 @@ export const waitlistService = {
       };
     }
 
-    try {
-      const { data, error } = await supabase
-        .from('waitlist_entries')
-        .select('id, student_id, queue_position, created_at')
-        .eq('slot_id', slotId)
-        .eq('booking_date', dateStr)
-        .eq('status', 'waiting')
-        .order('created_at', { ascending: true });
+    if (isUUID(slotId)) {
+      try {
+        const { data, error } = await supabase
+          .from('waitlist_entries')
+          .select('id, student_id, queue_position, created_at')
+          .eq('slot_id', slotId)
+          .eq('booking_date', dateStr)
+          .eq('status', 'waiting')
+          .order('created_at', { ascending: true });
 
-      if (!error && data) {
-        const waitlistCount = data.length;
-        let isStudentWaiting = false;
-        let studentPosition = 0;
-        let studentEntry = null;
+        if (!error && data) {
+          const waitlistCount = data.length;
+          let isStudentWaiting = false;
+          let studentPosition = 0;
+          let studentEntry = null;
 
-        if (studentId) {
-          const idx = data.findIndex(w => w.student_id === studentId);
-          if (idx !== -1) {
-            isStudentWaiting = true;
-            studentPosition = idx + 1;
-            studentEntry = data[idx];
+          if (studentId) {
+            const idx = data.findIndex(w => w.student_id === studentId);
+            if (idx !== -1) {
+              isStudentWaiting = true;
+              studentPosition = idx + 1;
+              studentEntry = data[idx];
+            }
           }
-        }
 
-        return {
-          waitlistCount,
-          isStudentWaiting,
-          studentPosition,
-          studentEntry,
-          isDisabled: false
-        };
-      }
-    } catch { /* fallback */ }
+          return {
+            waitlistCount,
+            isStudentWaiting,
+            studentPosition,
+            studentEntry,
+            isDisabled: false
+          };
+        }
+      } catch { /* fallback */ }
+    }
 
     const list = (await db.read('seatsync_waitlist')) || [];
     const slotEntries = list.filter(w => 
@@ -129,16 +133,57 @@ export const waitlistService = {
     };
   },
 
+  async getWaitlistForSlot(slotId, dateStr) {
+    let resolvedSlotId = slotId;
+    if (slotId && !isUUID(slotId)) {
+      const slotRow = await slotService.getSlotByCode(slotId);
+      if (slotRow?.id) resolvedSlotId = slotRow.id;
+    }
+
+    if (isUUID(resolvedSlotId)) {
+      try {
+        const { data, error } = await supabase
+          .from('waitlist_entries')
+          .select('*')
+          .eq('slot_id', resolvedSlotId)
+          .eq('booking_date', dateStr)
+          .eq('status', 'waiting')
+          .order('created_at', { ascending: true });
+
+        if (!error && data) return data;
+      } catch { /* fallback */ }
+    }
+
+    const list = (await db.read('seatsync_waitlist')) || [];
+    return list.filter(w =>
+      (w.slotId === slotId || w.slotId === resolvedSlotId) &&
+      (w.dateStr === dateStr || w.bookingDate === dateStr) &&
+      (w.status || '').toLowerCase() === 'waiting'
+    );
+  },
+
+  async getStudentWaitlistPosition(slotId, studentId, dateStr) {
+    const list = await this.getWaitlistForSlot(slotId, dateStr);
+    const idx = list.findIndex(w => w.student_id === studentId || w.studentId === studentId);
+    return idx !== -1 ? idx + 1 : 0;
+  },
+
   async joinWaitlist({ student, dateStr, slot, notificationPreference = 'In-App & System Notifications' }) {
     try {
-      const { data: libraryData } = await supabase.from('libraries').select('id').limit(1).single();
-      const { data: roomData } = await supabase.from('rooms').select('id').limit(1).single();
+      let resolvedSlotId = slot?.id || slot;
+      if (resolvedSlotId && !isUUID(resolvedSlotId)) {
+        const slotRow = await slotService.getSlotByCode(resolvedSlotId);
+        if (slotRow?.id) resolvedSlotId = slotRow.id;
+      }
 
-      if (libraryData && roomData) {
+      const { data: libraryData } = await supabase.from('libraries').select('id').limit(1).maybeSingle();
+      const { data: roomData } = await supabase.from('rooms').select('id').limit(1).maybeSingle();
+
+      if (libraryData?.id && roomData?.id && isUUID(resolvedSlotId)) {
         const { data, error } = await supabase.rpc('join_waitlist', {
           p_library_id: libraryData.id,
           p_room_id: roomData.id,
-          p_slot_id: slot.id,
+          p_slot_id: resolvedSlotId,
           p_booking_date: dateStr
         });
 
@@ -150,7 +195,7 @@ export const waitlistService = {
             studentId: student.id,
             studentName: student.name,
             dateStr,
-            slotId: slot.id,
+            slotId: resolvedSlotId,
             status: 'WAITING',
             joinedAt: new Date().toISOString()
           };
@@ -197,12 +242,14 @@ export const waitlistService = {
   },
 
   async leaveWaitlist(entryId, studentId) {
-    try {
-      await supabase
-        .from('waitlist_entries')
-        .update({ status: 'cancelled' })
-        .eq('id', entryId);
-    } catch { /* fallback */ }
+    if (isUUID(entryId)) {
+      try {
+        await supabase
+          .from('waitlist_entries')
+          .update({ status: 'cancelled' })
+          .eq('id', entryId);
+      } catch { /* fallback */ }
+    }
 
     const list = (await db.read('seatsync_waitlist')) || [];
     const idx = list.findIndex(w => w.id === entryId && w.studentId === studentId);

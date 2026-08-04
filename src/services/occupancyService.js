@@ -1,4 +1,4 @@
-import { supabase } from '../lib/supabase';
+import { supabase, isUUID } from '../lib/supabase';
 import { db } from './mockDatabase';
 import { defaultSlots, defaultSeats } from '../data/seedData';
 
@@ -38,7 +38,7 @@ export const occupancyService = {
     try {
       // 1. Load seats from Supabase
       let seatQuery = supabase.from('seats').select('*');
-      if (roomId) seatQuery = seatQuery.eq('room_id', roomId);
+      if (roomId && isUUID(roomId)) seatQuery = seatQuery.eq('room_id', roomId);
       const { data: seatsData } = await seatQuery.order('seat_number');
 
       let seats = seatsData || [];
@@ -68,9 +68,9 @@ export const occupancyService = {
         `)
         .in('status', ['confirmed', 'awaiting_check_in', 'checked_in']);
 
-      if (roomId) bookingQuery = bookingQuery.eq('room_id', roomId);
+      if (roomId && isUUID(roomId)) bookingQuery = bookingQuery.eq('room_id', roomId);
       if (bookingDate) bookingQuery = bookingQuery.eq('booking_date', bookingDate);
-      if (slotId) bookingQuery = bookingQuery.eq('slot_id', slotId);
+      if (slotId && isUUID(slotId)) bookingQuery = bookingQuery.eq('slot_id', slotId);
 
       const { data: bookingsData } = await bookingQuery;
       let activeBookings = bookingsData || [];

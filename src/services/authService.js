@@ -46,8 +46,8 @@ export const authService = {
     const cleanRegNo = registrationNumber.trim();
 
     // Check if duplicate user
-    const existing = users.find(u => 
-      (u.email && u.email.toLowerCase() === cleanEmail) || 
+    const existing = users.find(u =>
+      (u.email && u.email.toLowerCase() === cleanEmail) ||
       (u.collegeId && u.collegeId.toLowerCase() === cleanRegNo.toLowerCase()) ||
       (u.registration_number && u.registration_number.toLowerCase() === cleanRegNo.toLowerCase()) ||
       (u.identifier && u.identifier.toLowerCase() === cleanEmail)

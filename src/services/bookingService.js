@@ -1,4 +1,4 @@
-import { supabase } from '../lib/supabase';
+import { supabase, isUUID } from '../lib/supabase';
 import { db } from './mockDatabase';
 import { slotService } from './slotService';
 import { defaultSlots } from '../data/seedData';
@@ -125,34 +125,36 @@ export const bookingService = {
   async getMyBookings(studentId) {
     if (!studentId) return [];
 
-    try {
-      const { data, error } = await supabase
-        .from('bookings')
-        .select('*')
-        .eq('student_id', studentId)
-        .order('created_at', { ascending: false });
+    if (isUUID(studentId)) {
+      try {
+        const { data, error } = await supabase
+          .from('bookings')
+          .select('*')
+          .eq('student_id', studentId)
+          .order('created_at', { ascending: false });
 
-      if (!error && data && data.length > 0) {
-        return data.map(b => ({
-          id: b.id,
-          bookingCode: b.booking_code,
-          studentId: b.student_id,
-          studentName: b.student_name,
-          studentEmail: b.student_email,
-          collegeId: b.college_id,
-          bookingDate: b.booking_date,
-          slotId: b.slot_id,
-          slotTime: b.slot_time || `${b.start_time || ''} – ${b.end_time || ''}`,
-          floorId: b.floor_id,
-          floorName: b.floor_name || 'Ground Floor',
-          seatId: b.seat_id,
-          seatNumber: b.seat_number || b.seat_id,
-          status: b.status,
-          cancellationReason: b.cancellation_reason,
-          createdAt: b.created_at
-        }));
-      }
-    } catch { /* fallback */ }
+        if (!error && data && data.length > 0) {
+          return data.map(b => ({
+            id: b.id,
+            bookingCode: b.booking_code,
+            studentId: b.student_id,
+            studentName: b.student_name,
+            studentEmail: b.student_email,
+            collegeId: b.college_id,
+            bookingDate: b.booking_date,
+            slotId: b.slot_id,
+            slotTime: b.slot_time || `${b.start_time || ''} – ${b.end_time || ''}`,
+            floorId: b.floor_id,
+            floorName: b.floor_name || 'Ground Floor',
+            seatId: b.seat_id,
+            seatNumber: b.seat_number || b.seat_id,
+            status: b.status,
+            cancellationReason: b.cancellation_reason,
+            createdAt: b.created_at
+          }));
+        }
+      } catch { /* fallback */ }
+    }
 
     // Local fallback
     const bookings = (await db.read('seatsync_bookings')) || [];
@@ -205,27 +207,98 @@ export const bookingService = {
     }));
   },
 
+  async getBookingsForSlot(slotId, dateStr) {
+    let resolvedSlotId = slotId;
+    if (slotId && !isUUID(slotId)) {
+      const slotRow = await slotService.getSlotByCode(slotId);
+      if (slotRow?.id) resolvedSlotId = slotRow.id;
+    }
+
+    if (isUUID(resolvedSlotId)) {
+      try {
+        const { data, error } = await supabase
+          .from('bookings')
+          .select('*')
+          .eq('slot_id', resolvedSlotId)
+          .eq('booking_date', dateStr)
+          .in('status', ['confirmed', 'awaiting_check_in', 'checked_in']);
+
+        if (!error && data) return data;
+      } catch { /* fallback */ }
+    }
+
+    const bookings = (await db.read('seatsync_bookings')) || [];
+    return bookings.filter(b => 
+      (b.slotId === slotId || b.slot_id === slotId || b.slotId === resolvedSlotId) &&
+      (b.bookingDate === dateStr || b.booking_date === dateStr) &&
+      ['confirmed', 'active', 'checked_in', 'awaiting_check_in'].includes(String(b.status || '').toLowerCase())
+    );
+  },
+
   async createBooking(user, dateStr, slot, floorId, seatId) {
     if (!user || !user.id) {
       throw new Error('User authentication required.');
     }
 
     try {
-      const { data: result, error } = await supabase.rpc('create_booking', {
-        p_student_id: user.id,
-        p_booking_date: dateStr,
-        p_slot_id: slot.id,
-        p_seat_id: seatId
-      });
+      let resolvedSlotId = slot?.id || slot;
+      if (resolvedSlotId && !isUUID(resolvedSlotId)) {
+        const slotRow = await slotService.getSlotByCode(resolvedSlotId);
+        if (slotRow?.id) resolvedSlotId = slotRow.id;
+      }
 
-      if (!error && result) {
-        if (result.success === false) {
-          throw new Error(result.error || 'Failed to complete booking');
+      let resolvedSeatId = seatId;
+      if (resolvedSeatId && !isUUID(resolvedSeatId)) {
+        let seatNumStr = resolvedSeatId;
+        const match = String(resolvedSeatId).match(/\d+/);
+        if (match) {
+          const num = parseInt(match[0], 10);
+          seatNumStr = `A-${100 + num}`;
         }
-        return result;
+
+        const { data: seatRow } = await supabase
+          .from('seats')
+          .select('id')
+          .or(`seat_number.eq.${resolvedSeatId},seat_number.eq.${seatNumStr}`)
+          .maybeSingle();
+
+        if (seatRow?.id) {
+          resolvedSeatId = seatRow.id;
+        } else {
+          const matchNum = String(resolvedSeatId).match(/\d+/);
+          const index = matchNum ? Math.max(0, parseInt(matchNum[0], 10) - 1) : 0;
+          const { data: seatsList } = await supabase.from('seats').select('id').order('seat_number');
+          if (seatsList && seatsList[index]) {
+            resolvedSeatId = seatsList[index].id;
+          }
+        }
+      }
+
+      const { data: libRow } = await supabase.from('libraries').select('id').limit(1).maybeSingle();
+      const { data: roomRow } = await supabase.from('rooms').select('id, floor_id').limit(1).maybeSingle();
+      const { data: floorRow } = await supabase.from('floors').select('id').limit(1).maybeSingle();
+
+      const libId = libRow?.id;
+      const roomId = roomRow?.id;
+      const fId = (isUUID(floorId) ? floorId : roomRow?.floor_id) || floorRow?.id;
+
+      if (libId && roomId && fId && isUUID(resolvedSeatId) && isUUID(resolvedSlotId)) {
+        const { data: result, error } = await supabase.rpc('create_booking', {
+          p_library_id: libId,
+          p_floor_id: fId,
+          p_room_id: roomId,
+          p_seat_id: resolvedSeatId,
+          p_slot_id: resolvedSlotId,
+          p_booking_date: dateStr,
+          p_booking_source: 'online'
+        });
+
+        if (error) throw new Error(error.message);
+        if (result && result.success) return result;
+        if (result && result.error) throw new Error(result.error);
       }
     } catch (err) {
-      if (err.message && !err.message.includes('rpc')) {
+      if (err.message && !err.message.includes('fetch') && !err.message.includes('RPC')) {
         throw err;
       }
     }
@@ -294,17 +367,18 @@ export const bookingService = {
   },
 
   async cancelBooking(bookingId, studentId) {
-    try {
-      const { data: result, error } = await supabase.rpc('cancel_booking', {
-        p_booking_id: bookingId,
-        p_student_id: studentId,
-        p_reason: 'Cancelled by student'
-      });
+    if (isUUID(bookingId)) {
+      try {
+        const { data: result, error } = await supabase.rpc('cancel_booking', {
+          p_booking_id: bookingId,
+          p_reason: 'Cancelled by student'
+        });
 
-      if (!error && result) {
-        return result;
-      }
-    } catch { /* fallback */ }
+        if (!error && result) {
+          return result;
+        }
+      } catch { /* fallback */ }
+    }
 
     const bookings = (await db.read('seatsync_bookings')) || [];
     const target = bookings.find(b => b.id === bookingId && String(b.studentId || b.student_id) === String(studentId));
