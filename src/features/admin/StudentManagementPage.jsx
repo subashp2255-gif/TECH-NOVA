@@ -1,16 +1,16 @@
 import React, { useEffect, useState } from 'react';
-import { supabase } from '../../lib/supabase';
+import { supabase, isUUID } from '../../lib/supabase';
 import { adminService } from '../../services/adminService';
 import { useAuth } from '../../auth/AuthProvider';
 import { useSync } from '../../hooks/useSync';
 import { db } from '../../services/mockDatabase';
-import { Card, CardContent, CardHeader, CardTitle } from '../../components/shared/Card';
+import { Card, CardContent } from '../../components/shared/Card';
 import { Button } from '../../components/shared/Button';
 import { Input } from '../../components/shared/Input';
 import { Label } from '../../components/shared/Label';
 import { Badge } from '../../components/shared/Badge';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '../../components/shared/Dialog';
-import { Users, Search, Plus, UserCheck, ShieldAlert, CheckCircle2, RefreshCw } from 'lucide-react';
+import { Search, Plus, RefreshCw, UserCheck } from 'lucide-react';
 import toast from 'react-hot-toast';
 
 export default function StudentManagementPage() {
@@ -31,32 +31,114 @@ export default function StudentManagementPage() {
   const fetchStudents = async () => {
     try {
       setLoading(true);
-      const { data, error } = await supabase
-        .from('profiles')
-        .select('*')
-        .eq('role', 'student')
-        .order('created_at', { ascending: false });
 
-      if (!error && data && data.length > 0) {
-        setStudents(data.map(p => ({
-          id: p.id,
-          collegeId: p.registration_number || p.id.substring(0, 8),
-          identifier: p.registration_number || p.id.substring(0, 8),
-          name: p.full_name,
-          email: p.email,
-          department: p.department || 'Computer Science',
-          noShowCount: p.no_show_count || 0,
-          status: (p.status || 'active').toUpperCase()
-        })));
-        return;
+      let dbStudents = [];
+      let localStudents = [];
+
+      // 1. Fetch ALL real Supabase profiles and filter student roles in JS to prevent PostgREST enum syntax errors
+      try {
+        const { data, error } = await supabase
+          .from('profiles')
+          .select('*');
+
+        if (!error && data && Array.isArray(data)) {
+          const studentRows = data.filter(p => {
+            const r = String(p.role || 'student').toLowerCase();
+            return !['admin', 'super_admin', 'librarian', 'senior_librarian', 'support_staff'].includes(r);
+          });
+
+          dbStudents = studentRows.map(p => ({
+            id: p.id,
+            collegeId: p.registration_number || p.login_identifier || (typeof p.id === 'string' && p.id.length < 15 ? p.id : p.id.substring(0, 12)),
+            identifier: p.registration_number || p.email,
+            name: p.full_name || p.email?.split('@')[0] || 'Student',
+            email: p.email,
+            department: p.department || 'Computer Science & Engineering',
+            noShowCount: p.no_show_count || 0,
+            status: String(p.status || p.account_status || 'active').toUpperCase(),
+            createdAt: p.created_at
+          }));
+        } else if (error) {
+          console.warn('Supabase profiles query notice:', error.message);
+        }
+      } catch (err) {
+        console.warn('Supabase student profiles fetch notice:', err);
       }
-    } catch { /* fallback */ }
 
-    try {
-      const users = await db.read('seatsync_users') || [];
-      setStudents(users.filter(u => u.role === 'STUDENT'));
+      // 2. Fetch from local mock/storage database
+      try {
+        const users = await db.read('seatsync_users') || [];
+        localStudents = users
+          .filter(u => !u.role || String(u.role).toUpperCase() === 'STUDENT' || String(u.role).toUpperCase() === 'USER')
+          .map(u => ({
+            id: u.id,
+            collegeId: u.collegeId || u.registration_number || u.identifier || u.id,
+            identifier: u.identifier || u.collegeId || u.email,
+            name: u.name || u.fullName || 'Student',
+            email: u.email,
+            department: u.department || 'Computer Science & Engineering',
+            noShowCount: u.noShowCount || u.no_show_count || 0,
+            status: String(u.status || 'ACTIVE').toUpperCase(),
+            createdAt: u.createdAt
+          }));
+      } catch (err) {
+        console.warn('Local users fetch notice:', err);
+      }
+
+      // 3. Merge both databases, deduplicating by email or collegeId
+      const mergedMap = new Map();
+
+      // Insert DB profiles first (highest precedence)
+      dbStudents.forEach(s => {
+        const key = (s.email || s.collegeId || s.id).toLowerCase();
+        mergedMap.set(key, s);
+      });
+
+      // Insert/Merge local students
+      localStudents.forEach(s => {
+        const key = (s.email || s.collegeId || s.id).toLowerCase();
+        if (!mergedMap.has(key)) {
+          mergedMap.set(key, s);
+        } else {
+          // Merge metadata
+          const existing = mergedMap.get(key);
+          mergedMap.set(key, {
+            ...s,
+            ...existing,
+            name: existing.name && existing.name !== 'Student' ? existing.name : s.name,
+            collegeId: existing.collegeId || s.collegeId,
+            department: existing.department || s.department
+          });
+        }
+      });
+
+      // 4. Also check active local session for any logged in student
+      try {
+        const stored = localStorage.getItem('seatsync_session');
+        if (stored) {
+          const activeUser = JSON.parse(stored);
+          if (activeUser && (String(activeUser.role).toUpperCase() === 'STUDENT' || !activeUser.role)) {
+            const key = (activeUser.email || activeUser.collegeId || activeUser.id).toLowerCase();
+            if (!mergedMap.has(key)) {
+              mergedMap.set(key, {
+                id: activeUser.id,
+                collegeId: activeUser.collegeId || activeUser.registration_number || activeUser.identifier || 'STD001',
+                identifier: activeUser.identifier || activeUser.email,
+                name: activeUser.name || activeUser.fullName || 'Student',
+                email: activeUser.email,
+                department: activeUser.department || 'Computer Science & Engineering',
+                noShowCount: activeUser.noShowCount || 0,
+                status: String(activeUser.status || 'ACTIVE').toUpperCase(),
+                createdAt: new Date().toISOString()
+              });
+            }
+          }
+        }
+      } catch { /* ignore */ }
+
+      setStudents(Array.from(mergedMap.values()));
     } catch {
-      toast.error('Failed to load students list.');
+      toast.error('Failed to load student list.');
     } finally {
       setLoading(false);
     }
@@ -66,51 +148,61 @@ export default function StudentManagementPage() {
     fetchStudents();
   }, []);
 
-  useSync(['profiles', 'seatsync_users'], fetchStudents);
+  useSync(['profiles', 'users', 'seatsync_users'], fetchStudents);
 
   const handleAddStudent = async (e) => {
     e.preventDefault();
-    if (!newStudent.collegeId.trim() || !newStudent.name.trim()) {
+    const cleanCollegeId = newStudent.collegeId.trim();
+    const cleanName = newStudent.name.trim();
+
+    if (!cleanCollegeId || !cleanName) {
       toast.error('Please enter Student College ID and Name.');
       return;
     }
 
     try {
-      const email = newStudent.email.trim() || `${newStudent.collegeId.trim().toLowerCase()}@college.edu`;
-      const { data, error } = await supabase.auth.signUp({
+      const email = newStudent.email.trim() || `${cleanCollegeId.toLowerCase()}@college.edu`;
+
+      // 1. Try Supabase Auth Signup
+      await supabase.auth.signUp({
         email,
         password: newStudent.password || 'student123',
         options: {
           data: {
-            full_name: newStudent.name.trim(),
-            registration_number: newStudent.collegeId.trim(),
+            full_name: cleanName,
+            registration_number: cleanCollegeId,
             department: newStudent.department,
             role: 'student'
           }
         }
       });
 
-      if (error) {
-        // Fallback to local DB creation if auth signup fails
-        const users = await db.read('seatsync_users') || [];
-        const created = {
-          id: `USR-${Date.now()}`,
-          identifier: newStudent.collegeId.trim(),
-          collegeId: newStudent.collegeId.trim(),
-          name: newStudent.name.trim(),
-          email,
-          password: newStudent.password || 'student123',
-          role: 'STUDENT',
-          status: 'ACTIVE',
-          department: newStudent.department,
-          noShowCount: 0,
-          createdAt: new Date().toISOString()
-        };
-        users.push(created);
-        await db.write('seatsync_users', users);
-      }
+      // 2. Save to local storage database so student can log in instantly
+      const users = await db.read('seatsync_users') || [];
+      const created = {
+        id: `USR-${Date.now()}`,
+        identifier: cleanCollegeId,
+        collegeId: cleanCollegeId,
+        registration_number: cleanCollegeId,
+        name: cleanName,
+        email,
+        password: newStudent.password || 'student123',
+        role: 'STUDENT',
+        status: 'ACTIVE',
+        department: newStudent.department,
+        noShowCount: 0,
+        createdAt: new Date().toISOString()
+      };
 
-      toast.success(`Student ${newStudent.name} registered successfully!`);
+      const existsIndex = users.findIndex(u => u.collegeId === cleanCollegeId || u.email === email);
+      if (existsIndex >= 0) {
+        users[existsIndex] = { ...users[existsIndex], ...created };
+      } else {
+        users.push(created);
+      }
+      await db.write('seatsync_users', users);
+
+      toast.success(`Student ${cleanName} registered successfully!`);
       setAddModalOpen(false);
       setNewStudent({ collegeId: '', name: '', email: '', password: 'student123', department: 'Computer Science & Engineering' });
       fetchStudents();
@@ -122,22 +214,33 @@ export default function StudentManagementPage() {
   const handleToggleStatus = async (student) => {
     try {
       const isCurrentlyActive = student.status === 'ACTIVE';
-      const newStatus = isCurrentlyActive ? 'blocked' : 'active';
+      const newStatus = isCurrentlyActive ? 'BLOCKED' : 'ACTIVE';
+      const dbStatus = isCurrentlyActive ? 'blocked' : 'active';
       const reason = isCurrentlyActive ? 'Restricted by administrator action' : 'Reinstated to good standing';
 
-      // Call admin service (executes set_user_account_status RPC)
-      await adminService.applyStudentRestriction(student.id, 'BLOCK', 30, reason, adminUser);
+      // 1. Update Supabase Profile if UUID
+      if (student.id && isUUID(student.id)) {
+        await supabase
+          .from('profiles')
+          .update({
+            status: dbStatus,
+            blocked_reason: isCurrentlyActive ? reason : null,
+            blocked_at: isCurrentlyActive ? new Date().toISOString() : null,
+            no_show_count: isCurrentlyActive ? student.noShowCount : 0
+          })
+          .eq('id', student.id);
+      }
 
-      // Update DB fallback if applicable
+      // 2. Update local storage database
       const users = await db.read('seatsync_users') || [];
-      const target = users.find(u => u.id === student.id || u.collegeId === student.collegeId);
+      const target = users.find(u => u.id === student.id || u.collegeId === student.collegeId || u.email === student.email);
       if (target) {
-        target.status = isCurrentlyActive ? 'RESTRICTED' : 'ACTIVE';
+        target.status = newStatus;
         if (!isCurrentlyActive) target.noShowCount = 0;
         await db.write('seatsync_users', users);
       }
 
-      toast.success(`Updated status for ${student.name} to ${newStatus.toUpperCase()}.`);
+      toast.success(`Updated status for ${student.name} to ${newStatus}.`);
       fetchStudents();
     } catch (err) {
       toast.error(err.message || 'Failed to update student status.');
@@ -152,6 +255,7 @@ export default function StudentManagementPage() {
 
   return (
     <div className="space-y-6 max-w-7xl mx-auto animate-in fade-in duration-300 pb-12">
+      {/* Header */}
       <div className="flex flex-wrap items-center justify-between gap-4 pb-2 border-b border-slate-200">
         <div>
           <h1 className="text-2xl sm:text-3xl font-black text-navy tracking-tight">Student Account Management</h1>
@@ -170,6 +274,7 @@ export default function StudentManagementPage() {
         </div>
       </div>
 
+      {/* Search Toolbar */}
       <Card className="border border-slate-200 bg-white rounded-2xl p-4 shadow-xs">
         <div className="relative max-w-md">
           <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
@@ -183,6 +288,7 @@ export default function StudentManagementPage() {
         </div>
       </Card>
 
+      {/* Student Table */}
       <Card className="border border-slate-200 rounded-2xl shadow-xs overflow-hidden bg-white">
         <CardContent className="p-0">
           {loading ? (
@@ -205,7 +311,7 @@ export default function StudentManagementPage() {
                 </thead>
                 <tbody className="divide-y divide-slate-100">
                   {filtered.map(s => (
-                    <tr key={s.id} className="hover:bg-slate-50 transition-colors">
+                    <tr key={s.id || s.email} className="hover:bg-slate-50 transition-colors">
                       <td className="p-3.5 font-mono font-bold text-indigo-600">{s.collegeId || s.identifier}</td>
                       <td className="p-3.5 font-bold text-navy">{s.name}</td>
                       <td className="p-3.5 text-slate-500">{s.email}</td>
@@ -220,7 +326,7 @@ export default function StudentManagementPage() {
                         <Button
                           onClick={() => handleToggleStatus(s)}
                           variant="outline"
-                          className="h-7 text-[11px] font-bold rounded-lg border-slate-300 text-slate-700"
+                          className="h-7 text-[11px] font-bold rounded-lg border-slate-300 text-slate-700 hover:bg-slate-100"
                         >
                           {s.status === 'ACTIVE' ? 'Block Access' : 'Unblock Access'}
                         </Button>
@@ -246,7 +352,7 @@ export default function StudentManagementPage() {
 
           <form onSubmit={handleAddStudent} className="space-y-4 pt-2">
             <div className="space-y-1.5">
-              <Label className="text-xs font-bold text-slate-700">College ID</Label>
+              <Label className="text-xs font-bold text-slate-700">College ID *</Label>
               <Input
                 placeholder="e.g. 24AD099"
                 value={newStudent.collegeId}
@@ -257,7 +363,7 @@ export default function StudentManagementPage() {
             </div>
 
             <div className="space-y-1.5">
-              <Label className="text-xs font-bold text-slate-700">Full Student Name</Label>
+              <Label className="text-xs font-bold text-slate-700">Full Student Name *</Label>
               <Input
                 placeholder="e.g. Rahul Kumar"
                 value={newStudent.name}

@@ -102,7 +102,7 @@ export const waitlistService = {
     }
 
     const list = (await db.read('seatsync_waitlist')) || [];
-    const slotEntries = list.filter(w => 
+    const slotEntries = list.filter(w =>
       w.dateStr === dateStr &&
       w.slotId === slotId &&
       (w.status || '').toLowerCase() === 'waiting'

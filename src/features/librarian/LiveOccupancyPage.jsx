@@ -9,7 +9,7 @@ import { Button } from '../../components/shared/Button';
 import { Badge } from '../../components/shared/Badge';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '../../components/shared/Dialog';
 import {
-  Eye, Armchair, RefreshCw, Layers, Calendar, Clock, MapPin, AlertCircle, CheckCircle2, User, LogOut, LogIn
+  Eye, Armchair, RefreshCw, Layers, Calendar, Clock, MapPin, AlertCircle, CheckCircle2, User, LogOut, LogIn, Wrench
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 
@@ -366,7 +366,7 @@ export default function LiveOccupancyPage() {
         )}
       </Card>
 
-      {/* PHASE 10: SEAT DETAILS MODAL */}
+      {/* Seat Details Modal */}
       {selectedSeat && (
         <Dialog open={!!selectedSeat} onOpenChange={() => setSelectedSeat(null)}>
           <DialogContent className="max-w-md bg-white border border-slate-200 text-navy p-6 rounded-2xl space-y-4 shadow-2xl">
@@ -374,7 +374,7 @@ export default function LiveOccupancyPage() {
               <DialogTitle className="text-lg font-extrabold text-navy flex items-center justify-between">
                 <span>Seat {selectedSeat.seatNumber} Details</span>
                 <Badge className={`text-xs font-bold ${selectedSeat.colorClass}`}>
-                  {selectedSeat.stateLabel}
+                  {selectedSeat.displayStatus === 'maintenance' ? 'Maintenance' : selectedSeat.stateLabel}
                 </Badge>
               </DialogTitle>
               <DialogDescription className="text-xs text-slate-500 font-medium">
@@ -383,9 +383,35 @@ export default function LiveOccupancyPage() {
             </DialogHeader>
 
             <div className="p-4 bg-slate-50 border border-slate-200/80 rounded-xl space-y-2.5 text-xs font-mono">
-              <p className="text-slate-600">Status: <span className="font-bold text-navy uppercase">{selectedSeat.displayStatus}</span></p>
-              
-              {selectedSeat.booking ? (
+              <p className="text-slate-600">
+                Status: <span className="font-bold text-navy uppercase">{selectedSeat.displayStatus === 'maintenance' ? 'UNDER MAINTENANCE' : selectedSeat.displayStatus}</span>
+              </p>
+
+              {selectedSeat.displayStatus === 'maintenance' ? (
+                <div className="pt-2 border-t border-slate-200 space-y-2">
+                  <div className="p-2.5 bg-red-50 border border-red-200 text-red-800 rounded-xl flex items-center gap-2 text-xs font-bold font-sans">
+                    <Wrench size={16} className="text-red-600 shrink-0" />
+                    <span>Seat is currently under maintenance</span>
+                  </div>
+
+                  <p className="text-slate-600 pt-1">
+                    Reported By: <strong className="text-navy font-extrabold">{selectedSeat.maintenanceInfo?.reportedByLabel || selectedSeat.maintenanceInfo?.reportedByRole || 'Librarian'}</strong>
+                  </p>
+                  {selectedSeat.maintenanceInfo?.reason && (
+                    <p className="text-slate-600">
+                      Reason: <strong className="text-slate-800">{selectedSeat.maintenanceInfo.reason}</strong>
+                    </p>
+                  )}
+                  {selectedSeat.maintenanceInfo?.category && (
+                    <p className="text-slate-600">
+                      Category: <strong className="text-slate-800">{selectedSeat.maintenanceInfo.category}</strong>
+                    </p>
+                  )}
+                  <p className="text-slate-400 text-[11px] italic pt-1 border-t border-slate-100">
+                    Student booking details are hidden while seat is under maintenance.
+                  </p>
+                </div>
+              ) : selectedSeat.booking ? (
                 <>
                   <div className="pt-2 border-t border-slate-200 space-y-1.5">
                     <p className="text-slate-600">Student: <strong className="text-navy">{selectedSeat.booking.studentName}</strong></p>

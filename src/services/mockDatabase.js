@@ -1,6 +1,6 @@
-import { 
-  defaultUsers, defaultSlots, defaultFloors, defaultZones, defaultSeats, 
-  defaultBookings, defaultWaitlist, defaultNotifications, defaultActivityLogs, defaultSettings 
+import {
+  defaultUsers, defaultSlots, defaultFloors, defaultZones, defaultSeats,
+  defaultBookings, defaultWaitlist, defaultNotifications, defaultActivityLogs, defaultSettings
 } from '../data/seedData';
 
 class MockDatabase {

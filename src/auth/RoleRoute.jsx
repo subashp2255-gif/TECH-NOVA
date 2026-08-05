@@ -1,9 +1,27 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import { Navigate } from 'react-router-dom';
 import { useAuth } from './AuthProvider';
+import { supabase, isUUID } from '../lib/supabase';
 
 export default function RoleRoute({ allowedRoles, children }) {
   const { user, loading } = useAuth();
+
+  useEffect(() => {
+    if (user && allowedRoles && !allowedRoles.includes(user.role)) {
+      // Record unauthorized access attempt in audit logs
+      if (user.id && isUUID(user.id)) {
+        supabase.from('audit_logs').insert({
+          actor_id: user.id,
+          event_type: 'UNAUTHORIZED_LIBRARIAN_ACCESS',
+          metadata: {
+            user_role: user.role,
+            allowed_roles: allowedRoles,
+            pathname: window.location.pathname
+          }
+        }).catch(() => {});
+      }
+    }
+  }, [user, allowedRoles]);
 
   if (loading) {
     return (

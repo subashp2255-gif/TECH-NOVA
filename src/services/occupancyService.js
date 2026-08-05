@@ -88,14 +88,51 @@ export const occupancyService = {
         if (b.seat_id) bookingMap.set(b.seat_id, b);
       });
 
-      // 3. Merge seats with active bookings
+      // 2b. Load active maintenance records
+      let maintenanceRecords = [];
+      try {
+        const { data: supaMaint } = await supabase
+          .from('seat_maintenance')
+          .select(`
+            id,
+            seat_id,
+            category,
+            reason,
+            priority,
+            status,
+            created_at,
+            created_by,
+            profiles!created_by (full_name, role)
+          `)
+          .neq('status', 'Resolved');
+
+        if (supaMaint) maintenanceRecords = supaMaint;
+      } catch { /* proceed */ }
+
+      const localMaint = (await db.read('seatsync_maintenance')) || [];
+      const maintenanceMap = new Map();
+
+      maintenanceRecords.forEach(m => {
+        if (m.seat_id) maintenanceMap.set(m.seat_id, m);
+      });
+
+      localMaint.forEach(m => {
+        if (m.status !== 'Resolved') {
+          if (m.seat_id) maintenanceMap.set(m.seat_id, m);
+          if (m.seatNumber) maintenanceMap.set(m.seatNumber, m);
+        }
+      });
+
+      // 3. Merge seats with active bookings and maintenance info
       const mergedSeats = seats.map((seat, index) => {
         const seatId = seat.id || `SEAT-${String(index + 1).padStart(2, '0')}`;
         const seatNumber = seat.seat_number || seat.seatNumber || `S-${String(index + 1).padStart(2, '0')}`;
 
+        const maintRecord = maintenanceMap.get(seatId) || maintenanceMap.get(seatNumber);
+        const isMaintenance = seat.status === 'maintenance' || seat.operationalStatus === 'maintenance' || !!maintRecord;
+
         let matchingBooking = bookingMap.get(seatId);
         if (!matchingBooking) {
-          // Fallback match by seat number
           matchingBooking = activeBookings.find(b => b.seat_number === seatNumber) ||
             filteredLocal.find(b => b.seatId === seatId || b.seatNumber === seatNumber);
         }
@@ -103,13 +140,39 @@ export const occupancyService = {
         let displayStatus = 'available';
         let stateLabel = 'Available';
         let colorClass = 'bg-emerald-600 border-emerald-500 text-white';
-
-        const isMaintenance = seat.status === 'maintenance' || seat.operationalStatus === 'maintenance';
+        let maintenanceInfo = null;
 
         if (isMaintenance) {
           displayStatus = 'maintenance';
           stateLabel = 'Maintenance';
           colorClass = 'bg-red-600 border-red-500 text-white';
+
+          const roleStr = String(
+            maintRecord?.profiles?.role || 
+            maintRecord?.reportedByRole || 
+            maintRecord?.user_role || 
+            maintRecord?.created_by_role || 
+            ''
+          ).toLowerCase();
+
+          let reportedByRole = 'Librarian';
+          if (roleStr.includes('admin')) {
+            reportedByRole = 'Admin';
+          } else if (roleStr.includes('librarian') || roleStr.includes('staff')) {
+            reportedByRole = 'Librarian';
+          }
+
+          const reporterName = maintRecord?.profiles?.full_name || maintRecord?.reportedByName || null;
+
+          maintenanceInfo = {
+            reportedByRole,
+            reporterName,
+            reportedByLabel: reporterName ? `${reportedByRole} (${reporterName})` : reportedByRole,
+            reason: maintRecord?.reason || maintRecord?.description || 'Flagged for maintenance & repair',
+            category: maintRecord?.category || 'General Maintenance',
+            priority: maintRecord?.priority || 'Medium',
+            startedAt: maintRecord?.created_at || maintRecord?.createdAt || null
+          };
         } else if (matchingBooking) {
           const bStatus = matchingBooking.status;
           if (bStatus === 'checked_in' || bStatus === 'active') {
@@ -133,7 +196,8 @@ export const occupancyService = {
           displayStatus,
           stateLabel,
           colorClass,
-          booking: matchingBooking ? {
+          maintenanceInfo,
+          booking: isMaintenance ? null : (matchingBooking ? {
             id: matchingBooking.id,
             bookingCode: matchingBooking.booking_code || matchingBooking.bookingCode || matchingBooking.id,
             bookingDate: matchingBooking.booking_date || matchingBooking.bookingDate,
@@ -142,7 +206,7 @@ export const occupancyService = {
             studentName: matchingBooking.profiles?.full_name || matchingBooking.studentName || 'Student',
             studentRegistrationNumber: matchingBooking.profiles?.registration_number || matchingBooking.studentCollegeId || 'N/A',
             slotName: matchingBooking.slots?.name || matchingBooking.slotTime || 'Slot'
-          } : null
+          } : null)
         };
       });
 

@@ -1,4 +1,4 @@
-import { supabase } from '../lib/supabase';
+import { supabase, isUUID } from '../lib/supabase';
 import { db } from './mockDatabase';
 import { ROLES, defaultUsers } from '../data/seedData';
 
@@ -82,6 +82,45 @@ export const authService = {
     return newUser;
   },
 
+  async isLibrarianAuthorizedByAdmin(identifierOrEmail) {
+    const clean = String(identifierOrEmail || '').trim().toLowerCase();
+    if (!clean) return false;
+
+    // 1. Check Supabase DB profiles table for validated librarian profile
+    try {
+      const { data: dbProfiles } = await supabase
+        .from('profiles')
+        .select('*')
+        .or(`email.ilike.${clean},staff_id.ilike.${clean},login_identifier.ilike.${clean}`);
+
+      if (dbProfiles && dbProfiles.length > 0) {
+        const validLibrarian = dbProfiles.find(p =>
+          ['librarian', 'senior_librarian', 'support_staff'].includes(String(p.role).toLowerCase()) &&
+          String(p.status || 'active').toLowerCase() === 'active'
+        );
+        if (validLibrarian) return true;
+      }
+    } catch { /* proceed to local DB fallback */ }
+
+    // 2. Check local DB seatsync_users for validated librarian
+    try {
+      const users = (await db.read('seatsync_users')) || [];
+      const validUser = users.find(u =>
+        (
+          (u.email && u.email.toLowerCase() === clean) ||
+          (u.staffId && u.staffId.toLowerCase() === clean) ||
+          (u.identifier && u.identifier.toLowerCase() === clean) ||
+          (clean === 'lib001' || clean === 'staff001' || clean === 'librarian@college.edu')
+        ) &&
+        (u.role === 'LIBRARIAN' || u.role === 'STAFF' || u.role === 'librarian') &&
+        String(u.status || 'ACTIVE').toUpperCase() === 'ACTIVE'
+      );
+      if (validUser) return true;
+    } catch { /* proceed */ }
+
+    return false;
+  },
+
   async login(identifier, password, rememberMe = true) {
     const cleanId = String(identifier || '').trim();
     const cleanPass = String(password || '').trim();
@@ -94,7 +133,7 @@ export const authService = {
     let authSucceeded = false;
     let authUser = null;
 
-    // 1. If identifier is a Staff ID, Admin ID, or Reg Number (no '@'), resolve via RPC
+    // 1. Resolve Staff ID, Admin ID, or Reg Number (if no '@') via RPC
     if (!cleanId.includes('@')) {
       try {
         const { data: resolvedEmail, error: rpcError } = await supabase
@@ -160,13 +199,6 @@ export const authService = {
           throw new Error('This account is inactive. Contact the administrator.');
         }
 
-        try {
-          await supabase
-            .from('profiles')
-            .update({ last_login_at: new Date().toISOString() })
-            .eq('id', profile.id);
-        } catch { /* non-blocking */ }
-
         const dbRole = String(profile.role || 'student').toLowerCase();
         let mappedRole = ROLES.STUDENT;
         if (['librarian', 'senior_librarian', 'support_staff'].includes(dbRole)) {
@@ -174,6 +206,22 @@ export const authService = {
         } else if (['admin', 'super_admin', 'report_viewer'].includes(dbRole)) {
           mappedRole = ROLES.ADMIN;
         }
+
+        // Validate librarian against DB profiles
+        if (mappedRole === ROLES.LIBRARIAN) {
+          const isValidLibrarian = await this.isLibrarianAuthorizedByAdmin(profile.email || profile.staff_id || cleanId);
+          if (!isValidLibrarian) {
+            await supabase.auth.signOut();
+            throw new Error('Librarian login failed: Your email has not been validated or authorized by the Admin in the database. Please contact Admin to register your email.');
+          }
+        }
+
+        try {
+          await supabase
+            .from('profiles')
+            .update({ last_login_at: new Date().toISOString() })
+            .eq('id', profile.id);
+        } catch { /* non-blocking */ }
 
         const sessionUser = {
           id: profile.id,
@@ -188,6 +236,18 @@ export const authService = {
           status: accountStatus.toUpperCase(),
           noShowCount: profile.no_show_count || 0
         };
+
+        // Audit Logging for Librarian Login Success
+        if (mappedRole === ROLES.LIBRARIAN) {
+          try {
+            await supabase.from('audit_logs').insert({
+              actor_id: profile.id,
+              target_id: profile.id,
+              event_type: 'LIBRARIAN_LOGIN_SUCCESS',
+              metadata: { email: profile.email, staff_id: profile.staff_id }
+            });
+          } catch { /* non-blocking */ }
+        }
 
         localStorage.setItem('seatsync_session', JSON.stringify(sessionUser));
         window.dispatchEvent(new Event('storage'));
@@ -222,7 +282,28 @@ export const authService = {
     });
 
     if (!matchedUser) {
+      // Audit Logging for failed librarian login attempt if identifier suggests librarian
+      if (cleanId.toUpperCase().includes('LIB') || cleanId.toUpperCase().includes('STAFF')) {
+        try {
+          await supabase.from('audit_logs').insert({
+            event_type: 'LIBRARIAN_LOGIN_FAILED',
+            metadata: { identifier: cleanId }
+          });
+        } catch { /* non-blocking */ }
+      }
+
       throw new Error('Invalid ID/email or password.');
+    }
+
+    let role = matchedUser.role;
+    if (role === 'STAFF') role = ROLES.LIBRARIAN;
+
+    // Validate librarian role against DB profiles
+    if (role === ROLES.LIBRARIAN) {
+      const isAuthorized = await this.isLibrarianAuthorizedByAdmin(matchedUser.email || matchedUser.staffId || cleanId);
+      if (!isAuthorized) {
+        throw new Error('Librarian login failed: Your email has not been validated or authorized by the Admin in the database. Please contact Admin to register your email.');
+      }
     }
 
     const status = String(matchedUser.status || 'ACTIVE').toUpperCase();
@@ -239,9 +320,6 @@ export const authService = {
     if (status === 'INACTIVE') {
       throw new Error('This account is inactive. Contact the administrator.');
     }
-
-    let role = matchedUser.role;
-    if (role === 'STAFF') role = ROLES.LIBRARIAN;
 
     const sessionUser = {
       ...matchedUser,
@@ -262,7 +340,7 @@ export const authService = {
     if (!cleanEmail || !cleanEmail.includes('@')) throw new Error('Valid college email is required.');
     if (!password || password.length < 6) throw new Error('Password must be at least 6 characters.');
 
-    // 1. Save to local storage database first so login always works
+    // Save to local storage database (forced to STUDENT role)
     let localUser = null;
     try {
       localUser = await this._saveToLocalUser({
@@ -280,7 +358,7 @@ export const authService = {
       console.warn('Local user save warning:', localErr);
     }
 
-    // 2. Try Supabase Auth sign up gracefully
+    // Try Supabase Auth sign up gracefully (Always student)
     try {
       const { data: authData, error: authError } = await supabase.auth.signUp({
         email: cleanEmail,
@@ -290,7 +368,8 @@ export const authService = {
             full_name: fullName.trim(),
             registration_number: cleanRegNo,
             department,
-            year_of_study: yearOfStudy
+            year_of_study: yearOfStudy,
+            role: 'student' // Strictly enforced student role for public signups
           }
         }
       });
@@ -298,18 +377,18 @@ export const authService = {
       if (authError) {
         console.warn('Supabase auth sign up warning:', authError.message || authError);
       } else if (authData?.user && authData?.session) {
-        // If an active session exists, update profile if needed
         try {
           await supabase.from('profiles').update({
             full_name: fullName.trim(),
             registration_number: cleanRegNo,
             department,
-            year_of_study: yearOfStudy
+            year_of_study: yearOfStudy,
+            role: 'student'
           }).eq('id', authData.user.id);
-        } catch { /* trigger already created profile */ }
+        } catch { /* proceed */ }
       }
     } catch (supaErr) {
-      console.warn('Supabase connection error (proceeding with local registration):', supaErr);
+      console.warn('Supabase connection error:', supaErr);
     }
 
     return localUser || { user: { email: cleanEmail, name: fullName } };
@@ -380,6 +459,17 @@ export const authService = {
   },
 
   async logout() {
+    const currentUser = this.getCurrentUser();
+    if (currentUser && currentUser.role === ROLES.LIBRARIAN) {
+      try {
+        await supabase.from('audit_logs').insert({
+          actor_id: currentUser.id && isUUID(currentUser.id) ? currentUser.id : null,
+          event_type: 'LIBRARIAN_LOGOUT',
+          metadata: { email: currentUser.email, staff_id: currentUser.staffId }
+        });
+      } catch { /* non-blocking */ }
+    }
+
     try {
       await supabase.auth.signOut();
     } catch { /* ignore */ }
@@ -400,4 +490,3 @@ export const authService = {
     }
   }
 };
-
