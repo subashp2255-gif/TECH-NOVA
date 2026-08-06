@@ -137,7 +137,7 @@ export const bookingService = {
           .eq('student_id', studentId)
           .order('created_at', { ascending: false });
 
-        if (!error && data && data.length > 0) {
+        if (!error && data) {
           return data.map(b => {
             const rawSeat = b.seats?.seat_number || b.seat_number;
             const cleanSeatNumber = (rawSeat && !isUUID(rawSeat)) ? rawSeat : 'S-01';
@@ -170,6 +170,10 @@ export const bookingService = {
     return bookings
       .filter(b => String(b.studentId || b.student_id) === String(studentId))
       .sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
+  },
+
+  async getStudentBookings(studentId) {
+    return this.getMyBookings(studentId);
   },
 
   async getSeatsForSlot(floorId, dateStr, slotId, currentUserId = null) {
@@ -491,7 +495,7 @@ export const bookingService = {
         if (result && result.error) throw new Error(result.error);
       }
     } catch (err) {
-      if (err.message && !err.message.includes('fetch') && !err.message.includes('RPC')) {
+      if (isUUID(user.id) || (err.message && !err.message.includes('fetch'))) {
         throw err;
       }
     }
@@ -534,7 +538,7 @@ export const bookingService = {
     }
 
     const seats = (await db.read('seatsync_seats')) || [];
-    const targetSeat = seats.find(s => s.id === seatId) || { seatNumber: 'A-101' };
+    const targetSeat = seats.find(s => s.id === seatId || s.seatNumber === seatId) || { seatNumber: (typeof seatId === 'string' ? seatId : 'S-12') };
 
     const newBooking = {
       id: `BK-${Date.now()}`,
@@ -549,7 +553,7 @@ export const bookingService = {
       floorId,
       floorName: 'Ground Floor',
       seatId,
-      seatNumber: targetSeat.seatNumber || targetSeat.seat_number || 'A-101',
+      seatNumber: (targetSeat && (targetSeat.seatNumber || targetSeat.seat_number)) || (typeof seatId === 'string' ? seatId : 'S-12'),
       status: 'confirmed',
       createdAt: new Date().toISOString()
     };

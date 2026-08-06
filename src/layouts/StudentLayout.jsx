@@ -545,24 +545,16 @@ export default function StudentLayout() {
       </aside>
 
       <main className="flex-1 flex flex-col min-w-0 overflow-hidden">
-        <header className="h-16 bg-white/90 backdrop-blur-md border-b border-slate-200/80 flex items-center justify-between px-4 md:px-5 z-30 sticky top-0 shadow-xs shrink-0">
-          <div className="flex items-center gap-3">
-            <button
-              type="button"
-              className="md:hidden text-slate-500 hover:text-navy p-2 rounded-xl hover:bg-slate-100 transition-colors focus-visible:ring-2 focus-visible:ring-brandBlue/50 focus-visible:outline-none"
-              onClick={() => setIsMobileMenuOpen(true)}
-              aria-label="Open menu"
-            >
-              <Menu size={20} />
-            </button>
-
-            <div className="md:hidden flex items-center gap-2">
-              <div className="h-8 w-8 rounded-lg bg-gradient-to-br from-brandBlue to-blue-700 text-white flex items-center justify-center shadow-sm">
+        <header className="h-14 md:h-16 bg-white/95 backdrop-blur-md border-b border-slate-200/80 flex items-center justify-between px-3.5 md:px-5 z-30 sticky top-0 shadow-xs shrink-0">
+          <div className="flex items-center gap-2.5">
+            {/* Mobile Compact Brand Header */}
+            <div className="flex items-center gap-2">
+              <div className="h-8 w-8 rounded-xl bg-gradient-to-br from-brandBlue to-blue-700 text-white flex items-center justify-center shadow-sm">
                 <BookOpen size={16} />
               </div>
               <div className="flex flex-col leading-none">
                 <span className="font-black text-sm text-navy tracking-tight">SeatSync</span>
-                <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider">{currentPageTitle}</span>
+                <span className="text-[9px] font-extrabold text-slate-400 uppercase tracking-wider mt-0.5">{currentPageTitle}</span>
               </div>
             </div>
 
@@ -721,13 +713,13 @@ export default function StudentLayout() {
           </div>
         </header>
 
-        <div className="flex-1 overflow-auto p-4 md:p-6 lg:p-8 pb-20 md:pb-8">
+        <div className="flex-1 overflow-auto p-3.5 md:p-6 lg:p-8 pb-28 md:pb-8">
           <Outlet />
         </div>
 
         <nav
           aria-label="Mobile bottom navigation"
-          className="md:hidden fixed bottom-0 left-0 right-0 z-40 bg-white/95 backdrop-blur-md border-t border-slate-200/80 flex justify-around items-center py-1.5 px-1 shadow-lg"
+          className="md:hidden fixed bottom-0 left-0 right-0 z-40 bg-white/95 backdrop-blur-md border-t border-slate-200/80 flex justify-around items-center pt-1.5 pb-[calc(0.35rem+env(safe-area-inset-bottom,0px))] px-1 shadow-lg"
         >
           {BOTTOM_NAV_ITEMS.map((item) => (
             <NavLink

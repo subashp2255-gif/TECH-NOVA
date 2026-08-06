@@ -99,7 +99,56 @@ export const librarianService = {
     };
   },
 
-  // 2. VERIFY TOKEN
+  // 2. OPERATIONAL BOOKINGS FOR STAFF
+  async getOperationalBookings(libraryId = null, bookingDate = null, slotId = null) {
+    try {
+      const { data, error } = await supabase.rpc('get_operational_bookings', {
+        p_library_id: libraryId && isUUID(libraryId) ? libraryId : null,
+        p_booking_date: bookingDate || null,
+        p_slot_id: slotId && isUUID(slotId) ? slotId : null
+      });
+
+      if (!error && data) {
+        return data.map(b => ({
+          id: b.id,
+          bookingCode: b.booking_code,
+          studentId: b.student_id,
+          studentName: b.student_name,
+          studentRegistrationNumber: b.student_registration_number,
+          studentEmail: b.student_email,
+          libraryId: b.library_id,
+          libraryName: b.library_name,
+          roomId: b.room_id,
+          roomName: b.room_name,
+          seatId: b.seat_id,
+          seatNumber: b.seat_number,
+          slotId: b.slot_id,
+          slotName: b.slot_name,
+          slotTime: b.start_time ? `${b.start_time} – ${b.end_time}` : 'Slot',
+          bookingDate: b.booking_date,
+          bookingSource: b.booking_source || 'online',
+          status: b.status,
+          createdAt: b.created_at,
+          checkedInAt: b.checked_in_at,
+          checkedOutAt: b.checked_out_at
+        }));
+      }
+    } catch { /* fallback */ }
+
+    const local = (await db.read('seatsync_bookings')) || [];
+    return local
+      .filter(b => 
+        (!bookingDate || b.bookingDate === bookingDate || b.booking_date === bookingDate) &&
+        (!slotId || b.slotId === slotId || b.slot_id === slotId)
+      )
+      .map(b => ({
+        ...b,
+        studentRegistrationNumber: b.studentRegistrationNumber || b.student_registration_number || b.collegeId || '24AD042',
+        collegeId: b.collegeId || b.studentRegistrationNumber || b.student_registration_number || '24AD042'
+      }));
+  },
+
+  // 3. VERIFY TOKEN
   async verifyToken(tokenInput) {
     if (!tokenInput || !tokenInput.trim()) {
       throw new Error('Please enter a valid QR token, booking code, or student ID.');
