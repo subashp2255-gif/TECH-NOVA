@@ -83,16 +83,28 @@ ALTER TABLE public.user_rate_limits ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.scan_nonces ENABLE ROW LEVEL SECURITY;
 
 -- RLS Policies for new tables
+DROP POLICY IF EXISTS "Users can read own idempotency keys" ON public.idempotency_keys;
 CREATE POLICY "Users can read own idempotency keys" ON public.idempotency_keys FOR SELECT USING (auth.uid() = user_id);
+
+DROP POLICY IF EXISTS "System can insert idempotency keys" ON public.idempotency_keys;
 CREATE POLICY "System can insert idempotency keys" ON public.idempotency_keys FOR INSERT WITH CHECK (true);
 
+DROP POLICY IF EXISTS "Users can read own outbox notifications" ON public.notification_outbox;
 CREATE POLICY "Users can read own outbox notifications" ON public.notification_outbox FOR SELECT USING (auth.uid() = recipient_id OR public.is_librarian_or_admin());
+
+DROP POLICY IF EXISTS "System can manage notification outbox" ON public.notification_outbox;
 CREATE POLICY "System can manage notification outbox" ON public.notification_outbox FOR ALL USING (true);
 
+DROP POLICY IF EXISTS "Users can read own restrictions" ON public.user_restrictions;
 CREATE POLICY "Users can read own restrictions" ON public.user_restrictions FOR SELECT USING (auth.uid() = user_id OR public.is_librarian_or_admin());
+
+DROP POLICY IF EXISTS "Staff can manage restrictions" ON public.user_restrictions;
 CREATE POLICY "Staff can manage restrictions" ON public.user_restrictions FOR ALL USING (public.is_librarian_or_admin());
 
+DROP POLICY IF EXISTS "Staff can view scan nonces" ON public.scan_nonces;
 CREATE POLICY "Staff can view scan nonces" ON public.scan_nonces FOR SELECT USING (public.is_librarian_or_admin());
+
+DROP POLICY IF EXISTS "System can insert scan nonces" ON public.scan_nonces;
 CREATE POLICY "System can insert scan nonces" ON public.scan_nonces FOR INSERT WITH CHECK (true);
 
 -- ====================================================================
@@ -409,6 +421,8 @@ $$;
 -- ====================================================================
 -- WAITLIST OFFER ACCEPTANCE & EXPIRATION RPC FUNCTIONS
 -- ====================================================================
+DROP FUNCTION IF EXISTS public.accept_waitlist_offer(UUID, TEXT) CASCADE;
+DROP FUNCTION IF EXISTS public.accept_waitlist_offer(UUID) CASCADE;
 CREATE OR REPLACE FUNCTION public.accept_waitlist_offer(
     p_waitlist_id UUID,
     p_idempotency_key TEXT DEFAULT NULL
@@ -471,6 +485,8 @@ BEGIN
 END;
 $$;
 
+DROP FUNCTION IF EXISTS public.reject_waitlist_offer(UUID, TEXT) CASCADE;
+DROP FUNCTION IF EXISTS public.reject_waitlist_offer(UUID) CASCADE;
 CREATE OR REPLACE FUNCTION public.reject_waitlist_offer(
     p_waitlist_id UUID,
     p_idempotency_key TEXT DEFAULT NULL

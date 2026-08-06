@@ -464,8 +464,9 @@ $$;
 -- ====================================================================
 -- ACCEPT WAITLIST OFFER RPC FUNCTION
 -- ====================================================================
-DROP FUNCTION IF EXISTS public.accept_waitlist_offer(uuid, text);
-DROP FUNCTION IF EXISTS public.accept_waitlist_offer(uuid);
+DROP FUNCTION IF EXISTS public.accept_waitlist_offer CASCADE;
+DROP FUNCTION IF EXISTS public.accept_waitlist_offer(uuid, text) CASCADE;
+DROP FUNCTION IF EXISTS public.accept_waitlist_offer(uuid) CASCADE;
 
 CREATE OR REPLACE FUNCTION public.accept_waitlist_offer(
     p_waitlist_id UUID,
@@ -594,8 +595,9 @@ $$;
 -- ====================================================================
 -- REJECT WAITLIST OFFER RPC FUNCTION
 -- ====================================================================
-DROP FUNCTION IF EXISTS public.reject_waitlist_offer(uuid, text);
-DROP FUNCTION IF EXISTS public.reject_waitlist_offer(uuid);
+DROP FUNCTION IF EXISTS public.reject_waitlist_offer CASCADE;
+DROP FUNCTION IF EXISTS public.reject_waitlist_offer(uuid, text) CASCADE;
+DROP FUNCTION IF EXISTS public.reject_waitlist_offer(uuid) CASCADE;
 
 CREATE OR REPLACE FUNCTION public.reject_waitlist_offer(
     p_waitlist_id UUID,

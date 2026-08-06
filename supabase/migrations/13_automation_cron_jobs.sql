@@ -25,12 +25,14 @@ CREATE INDEX IF NOT EXISTS idx_auto_logs_status ON public.automation_execution_l
 ALTER TABLE public.automation_execution_logs ENABLE ROW LEVEL SECURITY;
 
 -- Read policy for authenticated staff and admins
+DROP POLICY IF EXISTS "Staff and Admins can view automation execution logs" ON public.automation_execution_logs;
 CREATE POLICY "Staff and Admins can view automation execution logs"
     ON public.automation_execution_logs
     FOR SELECT
     USING (public.is_librarian_or_admin());
 
 -- System insert policy
+DROP POLICY IF EXISTS "System can insert automation execution logs" ON public.automation_execution_logs;
 CREATE POLICY "System can insert automation execution logs"
     ON public.automation_execution_logs
     FOR INSERT

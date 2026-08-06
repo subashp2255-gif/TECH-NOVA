@@ -137,7 +137,10 @@ export default function LiveOccupancyPage() {
     initFilters();
   }, []);
 
-  // 2. Fetch Authoritative Occupancy Data
+  // 2. Fetch Authoritative Occupancy Data from Supabase RPCs
+  const [occupantsList, setOccupantsList] = useState([]);
+  const [snapshotMetrics, setSnapshotMetrics] = useState(null);
+
   const loadOccupancy = useCallback(async (isSilent = false) => {
     if (!selectedRoomId || !selectedDate || !selectedSlotId) return;
 
@@ -148,28 +151,68 @@ export default function LiveOccupancyPage() {
     setQueryError(null);
 
     try {
-      const res = await occupancyService.getOccupancy({
-        roomId: selectedRoomId,
-        bookingDate: selectedDate,
-        slotId: selectedSlotId
-      });
+      const [liveSnapshot, occupantsData, seatsSnapshot] = await Promise.all([
+        librarianService.getLiveOccupancySnapshot(
+          selectedLibraryId,
+          null,
+          selectedRoomId,
+          selectedSlotId,
+          selectedDate
+        ),
+        librarianService.getCurrentOccupants(
+          selectedLibraryId,
+          null,
+          selectedRoomId,
+          selectedSlotId,
+          selectedDate
+        ),
+        librarianService.getLibrarianSlotSnapshot(
+          selectedLibraryId,
+          selectedRoomId,
+          selectedDate,
+          selectedSlotId
+        )
+      ]);
 
-      if (res.error && !res.seats.length) {
-        setQueryError(res.error);
-        toast.error(`Database Query Error: ${res.error}`);
-        setConnectionStatus('offline');
-      } else {
-        setOccupancyData(res);
-        setLastUpdated(new Date());
-        setConnectionStatus('live');
-      }
-    } catch {
+      setSnapshotMetrics(liveSnapshot);
+      setOccupantsList(occupantsData || []);
+
+      const seatsArr = seatsSnapshot || [];
+      const totalCapacity = liveSnapshot?.total_seats || seatsArr.length || 40;
+      const availableCount = liveSnapshot?.available_seats ?? seatsArr.filter(s => s.status_state === 'available').length;
+      const reservedCount = liveSnapshot?.reserved_seats ?? seatsArr.filter(s => s.status_state === 'reserved').length;
+      const occupiedCount = liveSnapshot?.occupied_seats ?? seatsArr.filter(s => s.status_state === 'occupied').length;
+      const maintenanceCount = liveSnapshot?.maintenance_seats ?? seatsArr.filter(s => s.status_state === 'maintenance').length;
+      const heldCount = seatsArr.filter(s => s.status_state === 'held').length;
+      const occupancyPercentage = liveSnapshot?.occupancy_percentage ?? (totalCapacity > 0 ? Math.round((occupiedCount / totalCapacity) * 100) : 0);
+
+      const formattedData = {
+        seats: seatsArr.map(s => ({
+          ...s,
+          displayStatus: s.status_state,
+          ui_status: s.ui_status,
+          booking: s.booking
+        })),
+        totalCapacity,
+        availableCount,
+        reservedCount,
+        occupiedCount,
+        maintenanceCount,
+        heldCount,
+        occupancyPercentage
+      };
+
+      setOccupancyData(formattedData);
+      setLastUpdated(new Date());
+      setConnectionStatus('live');
+    } catch (err) {
+      setQueryError(err.message || 'Failed to fetch occupancy snapshot');
       setConnectionStatus('offline');
     } finally {
       setLoading(false);
       setFilterLoading(false);
     }
-  }, [selectedRoomId, selectedDate, selectedSlotId]);
+  }, [selectedLibraryId, selectedRoomId, selectedDate, selectedSlotId]);
 
   useEffect(() => {
     if (selectedRoomId && selectedDate && selectedSlotId) {

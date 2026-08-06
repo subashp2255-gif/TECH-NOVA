@@ -62,7 +62,26 @@ WHERE p.id IS NULL
 ON CONFLICT (id) DO NOTHING;
 
 
--- 2. CANONICAL BOOKING CONSTRAINTS & PARTIAL UNIQUE INDEXES
+-- 2. SCHEMA COLUMN SANITY & IDEMPOTENCY TABLE
+ALTER TABLE public.bookings ADD COLUMN IF NOT EXISTS idempotency_key TEXT;
+ALTER TABLE public.bookings ADD COLUMN IF NOT EXISTS qr_token TEXT;
+ALTER TABLE public.bookings ADD COLUMN IF NOT EXISTS booking_source TEXT DEFAULT 'online';
+ALTER TABLE public.bookings ADD COLUMN IF NOT EXISTS checked_in_at TIMESTAMPTZ;
+ALTER TABLE public.bookings ADD COLUMN IF NOT EXISTS checked_in_by UUID;
+ALTER TABLE public.bookings ADD COLUMN IF NOT EXISTS checked_out_at TIMESTAMPTZ;
+ALTER TABLE public.bookings ADD COLUMN IF NOT EXISTS checked_out_by UUID;
+ALTER TABLE public.bookings ADD COLUMN IF NOT EXISTS cancellation_reason TEXT;
+
+CREATE TABLE IF NOT EXISTS public.idempotency_keys (
+    idempotency_key TEXT PRIMARY KEY,
+    user_id UUID REFERENCES public.profiles(id),
+    action TEXT NOT NULL,
+    response_payload JSONB NOT NULL,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+
+-- 3. CANONICAL BOOKING CONSTRAINTS & PARTIAL UNIQUE INDEXES
 CREATE UNIQUE INDEX IF NOT EXISTS idx_unique_active_seat_booking
 ON public.bookings(seat_id, slot_id, booking_date)
 WHERE status IN ('confirmed', 'checked_in', 'awaiting_check_in');

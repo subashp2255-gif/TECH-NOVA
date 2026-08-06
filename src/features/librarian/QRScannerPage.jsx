@@ -248,11 +248,41 @@ export default function QRScannerPage() {
     const nowTimeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
     try {
-      const res = await librarianService.verifyToken(targetToken);
+      const res = await librarianService.verifyToken(targetToken, staffUser?.library_id, '2026-08-06');
       const isCheckoutDetected = res.isCheckout || mode === 'checkout';
+
+      if (res.statusCode === 'TOO_EARLY') {
+        const tooEarlyResult = {
+          valid: false,
+          isTooEarly: true,
+          message: res.message || 'Valid reservation — check-in not open yet. Check-in opens 15 minutes before the slot.',
+          booking: res.booking,
+          verifiedAt: nowTimeStr,
+          token: targetToken
+        };
+
+        setScanResult(tooEarlyResult);
+        setScanningStatus('idle');
+
+        const activityItem = {
+          id: `scan-${Date.now()}`,
+          timeStr: nowTimeStr,
+          reference: res.booking?.bookingCode || res.booking?.studentRegistrationNumber || targetToken,
+          studentName: res.booking?.studentName || 'Student',
+          action: 'Entry',
+          seatNumber: res.booking?.seatNumber || 'N/A',
+          result: 'Too Early',
+          statusClass: 'bg-amber-100 text-amber-800 border-amber-300'
+        };
+
+        setRecentVerifications(prev => [activityItem, ...prev.slice(0, 9)]);
+        toast.error(res.message || 'Check-in is not open yet.');
+        return;
+      }
 
       const successResult = {
         valid: true,
+        isReady: true,
         isCheckout: isCheckoutDetected,
         booking: res.booking,
         verifiedAt: nowTimeStr,
@@ -262,11 +292,11 @@ export default function QRScannerPage() {
       setScanResult(successResult);
       setScanningStatus('idle');
 
-      // Add to recent activity log (capped at 10 items)
+      // Add to recent activity log (capped at 10 items) without reference truncation
       const activityItem = {
         id: `scan-${Date.now()}`,
         timeStr: nowTimeStr,
-        reference: res.booking?.studentRegistrationNumber || res.booking?.studentCollegeId || targetToken.slice(0, 10),
+        reference: res.booking?.bookingCode || res.booking?.studentRegistrationNumber || targetToken,
         studentName: res.booking?.studentName || 'Student',
         action: isCheckoutDetected ? 'Checkout' : 'Entry',
         seatNumber: res.booking?.seatNumber || 'N/A',
@@ -283,11 +313,14 @@ export default function QRScannerPage() {
         cooldownRef.current = false;
       }, 2000);
 
-      toast.success(isCheckoutDetected ? 'Checkout QR verified!' : 'Entry Pass QR verified!');
+      toast.success(isCheckoutDetected ? 'Checkout QR verified!' : 'Pass Validated • Ready for Check-In!');
     } catch (err) {
+      const isTooEarly = err.message && err.message.includes('check-in not open yet');
+
       const failedResult = {
         valid: false,
-        message: err.message || 'Invalid or expired QR token.',
+        isTooEarly,
+        message: err.message || 'Booking record not found. Confirm the booking reference or ask the student to refresh their latest QR pass.',
         token: targetToken,
         verifiedAt: nowTimeStr
       };
@@ -298,12 +331,12 @@ export default function QRScannerPage() {
       const failedActivityItem = {
         id: `scan-${Date.now()}`,
         timeStr: nowTimeStr,
-        reference: targetToken.slice(0, 10),
+        reference: targetToken,
         studentName: 'N/A',
         action: mode === 'checkout' ? 'Checkout' : 'Entry',
         seatNumber: '—',
-        result: 'Failed / Expired',
-        statusClass: 'bg-rose-100 text-rose-800 border-rose-300'
+        result: isTooEarly ? 'Too Early' : 'Failed',
+        statusClass: isTooEarly ? 'bg-amber-100 text-amber-800 border-amber-300' : 'bg-rose-100 text-rose-800 border-rose-300'
       };
 
       setRecentVerifications(prev => [failedActivityItem, ...prev.slice(0, 9)]);
@@ -710,7 +743,52 @@ export default function QRScannerPage() {
             aria-live="polite"
           >
             <Card className="border border-slate-200/90 bg-white rounded-3xl p-6 shadow-md overflow-hidden">
-              {!scanResult.valid ? (
+              {scanResult.isTooEarly ? (
+                /* TOO EARLY / FUTURE RESERVATION STATE (AMBER WARNING) */
+                <div className="p-5 bg-amber-50 border-2 border-amber-300 text-navy rounded-2xl space-y-4">
+                  <div className="flex items-start gap-3">
+                    <div className="w-10 h-10 rounded-2xl bg-amber-500 text-white flex items-center justify-center shrink-0 shadow-sm font-bold">
+                      <Clock size={22} />
+                    </div>
+                    <div className="space-y-1">
+                      <h3 className="text-base font-black text-amber-950">Valid Reservation — Check-In Not Open Yet</h3>
+                      <p className="text-xs text-amber-900 font-semibold leading-relaxed">
+                        {scanResult.message}
+                      </p>
+                    </div>
+                  </div>
+
+                  {scanResult.booking && (
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 bg-white p-3.5 rounded-xl border border-amber-200 text-xs font-mono">
+                      <div>
+                        <span className="text-slate-400 text-[10px] block uppercase font-extrabold">Student Name</span>
+                        <strong className="text-navy font-bold font-sans text-xs">{scanResult.booking.studentName}</strong>
+                      </div>
+                      <div>
+                        <span className="text-slate-400 text-[10px] block uppercase font-extrabold">Register ID</span>
+                        <strong className="text-indigo-600 font-bold">{scanResult.booking.studentRegistrationNumber || '24AD042'}</strong>
+                      </div>
+                      <div>
+                        <span className="text-slate-400 text-[10px] block uppercase font-extrabold">Booking Date</span>
+                        <strong className="text-amber-700 font-bold">{scanResult.booking.bookingDate}</strong>
+                      </div>
+                      <div>
+                        <span className="text-slate-400 text-[10px] block uppercase font-extrabold">Assigned Seat</span>
+                        <strong className="text-teal-600 font-bold">{scanResult.booking.seatNumber}</strong>
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="flex flex-wrap items-center justify-end gap-3 pt-2 border-t border-amber-200/80">
+                    <Button
+                      onClick={handleScanNextStudent}
+                      className="bg-amber-600 hover:bg-amber-700 text-white font-extrabold text-xs h-10 px-5 rounded-2xl shadow-xs"
+                    >
+                      Scan Next Student →
+                    </Button>
+                  </div>
+                </div>
+              ) : !scanResult.valid ? (
                 /* FAILED VERIFICATION STATE (RED) */
                 <div className="p-5 bg-rose-50 border-2 border-rose-300 text-navy rounded-2xl space-y-4">
                   <div className="flex items-start gap-3">

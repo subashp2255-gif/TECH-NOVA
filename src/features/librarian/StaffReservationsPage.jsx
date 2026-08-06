@@ -19,8 +19,8 @@ export default function StaffReservationsPage() {
   const fetchBookings = async () => {
     try {
       setLoading(true);
-      const data = await db.read('seatsync_bookings') || [];
-      setBookings(data);
+      const data = await librarianService.getStaffBookings();
+      setBookings(data || []);
     } catch {
       toast.error('Failed to load reservations.');
     } finally {
@@ -36,8 +36,9 @@ export default function StaffReservationsPage() {
 
   const filtered = bookings.filter(b =>
     (b.studentName || '').toLowerCase().includes(search.toLowerCase()) ||
+    (b.studentRegistrationNumber || b.collegeId || '').toLowerCase().includes(search.toLowerCase()) ||
     (b.seatNumber || '').toLowerCase().includes(search.toLowerCase()) ||
-    (b.id || '').toLowerCase().includes(search.toLowerCase())
+    (b.bookingCode || b.id || '').toLowerCase().includes(search.toLowerCase())
   );
 
   const handleExportCSV = () => {

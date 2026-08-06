@@ -436,11 +436,22 @@ export const bookingService = {
 
     const key = idempotencyKey || `IK-BK-${user.id}-${dateStr}-${seatId}-${Date.now()}`;
 
+    if (idempotencyKey) {
+      const localBookings = (await db.read('seatsync_bookings')) || [];
+      const existingIdempotent = localBookings.find(b => b.idempotencyKey === idempotencyKey || b.idempotency_key === idempotencyKey);
+      if (existingIdempotent) return existingIdempotent;
+    }
+
     try {
       let resolvedSlotId = slot?.id || slot;
       if (resolvedSlotId && !isUUID(resolvedSlotId)) {
         const slotRow = await slotService.getSlotByCode(resolvedSlotId);
-        if (slotRow?.id) resolvedSlotId = slotRow.id;
+        if (slotRow?.id) {
+          resolvedSlotId = slotRow.id;
+        } else {
+          const { data: firstSlot } = await supabase.from('slots').select('id').limit(1).maybeSingle();
+          if (firstSlot?.id) resolvedSlotId = firstSlot.id;
+        }
       }
 
       let resolvedSeatId = seatId;
@@ -490,11 +501,28 @@ export const bookingService = {
           p_idempotency_key: key
         });
 
-        if (error) throw new Error(error.message);
+        if (error) {
+          if (error.code === '23505' || error.message.includes('idx_unique_active_seat_booking') || error.message.includes('SEAT_ALREADY_RESERVED')) {
+            throw new Error('This seat has just been reserved by another student. Please select another seat.');
+          }
+          if (error.message.includes('STUDENT_OVERLAP')) {
+            throw new Error('You already have an active reservation for an overlapping time slot on this date.');
+          }
+          throw new Error(error.message);
+        }
+
         if (result && result.success) return result;
-        if (result && result.error) throw new Error(result.error);
+        if (result && result.error) {
+          if (result.error.includes('SEAT_ALREADY_RESERVED')) {
+            throw new Error('This seat has just been reserved by another student. Please select another seat.');
+          }
+          throw new Error(result.error);
+        }
       }
     } catch (err) {
+      if (err.message && (err.message.includes('reserved') || err.message.includes('overlap') || err.message.includes('STUDENT_OVERLAP') || err.message.includes('SEAT_NOT_AVAILABLE'))) {
+        throw err;
+      }
       if (isUUID(user.id) || (err.message && !err.message.includes('fetch'))) {
         throw err;
       }
@@ -502,6 +530,12 @@ export const bookingService = {
 
     // Local fallback creation with strict validation
     const bookings = (await db.read('seatsync_bookings')) || [];
+
+    // Idempotency check in local fallback
+    if (key) {
+      const existingIdempotent = bookings.find(b => b.idempotencyKey === key || b.idempotency_key === key);
+      if (existingIdempotent) return existingIdempotent;
+    }
 
     // Check 1: Does student ALREADY have an active booking in this slot for this date?
     const existingStudentBooking = bookings.find(b => {
@@ -542,7 +576,9 @@ export const bookingService = {
 
     const newBooking = {
       id: `BK-${Date.now()}`,
-      booking_code: `SS-${Math.floor(1000 + Math.random() * 9000)}`,
+      booking_code: `BK-${Math.floor(10000000 + Math.random() * 90000000)}`,
+      qrToken: `QR-${Math.floor(1000000000 + Math.random() * 9000000000)}`,
+      idempotencyKey: key,
       studentId: user.id,
       studentName: user.name,
       studentEmail: user.email,

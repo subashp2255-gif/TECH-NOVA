@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Outlet, NavLink, useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../auth/AuthProvider';
+import { supabase } from '../lib/supabase';
 import { notificationService } from '../services/notificationService';
 import { bookingService } from '../services/bookingService';
 import { db } from '../services/mockDatabase';
@@ -355,6 +356,19 @@ export default function StudentLayout() {
   useEffect(() => {
     fetchNotifications();
     fetchBadgeCounts();
+
+    // Supabase Realtime Subscription for bookings changes
+    const channel = supabase
+      .channel('student-layout-bookings-realtime')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'bookings' }, () => {
+        fetchNotifications();
+        fetchBadgeCounts();
+      })
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
   }, [user]);
 
   useSync((event) => {
