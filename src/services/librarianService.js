@@ -248,6 +248,15 @@ export const librarianService = {
       }
     } catch { /* fallback */ }
 
+    const localBookings = (await db.read('seatsync_bookings')) || [];
+    const rawSeats = (await db.read('seatsync_seats')) || [];
+    const localSeats = rawSeats.length > 0 ? rawSeats : Array.from({ length: 40 }, (_, i) => ({
+      id: `SEAT-${String(i + 1).padStart(2, '0')}`,
+      seatNumber: `S-${String(i + 1).padStart(2, '0')}`,
+      allocationMode: 'online',
+      status: 'available'
+    }));
+
     return localSeats.map(s => {
       const activeBooking = localBookings.find(b =>
         (b.seatId === s.id || b.seatNumber === s.seatNumber || b.seat_number === s.seatNumber) &&
