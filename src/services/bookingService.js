@@ -1,7 +1,7 @@
-import { supabase, isUUID } from '../lib/supabase';
-import { db } from './mockDatabase';
-import { slotService } from './slotService';
-import { defaultSlots } from '../data/seedData';
+import { supabase, isUUID } from '../lib/supabase.js';
+import { db } from './mockDatabase.js';
+import { slotService } from './slotService.js';
+import { defaultSlots } from '../data/seedData.js';
 import { format, addDays } from 'date-fns';
 
 export const bookingService = {
@@ -172,34 +172,79 @@ export const bookingService = {
       .sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
   },
 
-  async getSeatsForSlot(floorId, dateStr, slotId) {
+  async getSeatsForSlot(floorId, dateStr, slotId, currentUserId = null) {
     try {
       const [{ data: seats }, { data: bookings }] = await Promise.all([
-        supabase.from('seats').select('*'),
+        supabase.from('seats').select('*').order('seat_number', { ascending: true }),
         supabase.from('bookings').select('*').eq('booking_date', dateStr)
       ]);
 
       if (seats && seats.length > 0) {
+        // Filter ONLY online seats for student seat map (S-01 to S-40)
+        const onlineSeats = seats.filter(s => s.allocation_mode !== 'walk_in_only');
+
         const activeBookings = (bookings || []).filter(b => 
           (b.slot_id === slotId || b.slotId === slotId) &&
           ['confirmed', 'awaiting_check_in', 'checked_in', 'active', 'checkout_pending'].includes(String(b.status || '').toLowerCase())
         );
-        const bookedSeatIds = new Set(activeBookings.map(b => b.seat_id || b.seatId));
 
-        return seats.map(s => ({
-          id: s.id,
-          seatNumber: s.seat_number,
-          type: s.seat_type || 'Quiet Study (Zone A)',
-          zoneId: s.is_accessible ? 'zone-a' : 'zone-b',
-          powerOutlet: s.has_power_socket,
-          nearWindow: s.is_accessible,
-          ui_status: bookedSeatIds.has(s.id) ? 'Occupied' : (s.status === 'maintenance' ? 'Maintenance' : 'Available')
-        }));
+        const bookingMap = new Map();
+        activeBookings.forEach(b => {
+          const seatKey = b.seat_id || b.seatId;
+          if (seatKey) bookingMap.set(seatKey, b);
+        });
+
+        return onlineSeats.map(s => {
+          const booking = bookingMap.get(s.id);
+          const isUserBooked = Boolean(currentUserId && booking && String(booking.student_id || booking.studentId) === String(currentUserId));
+          const bookingStatus = String(booking?.status || '').toLowerCase();
+          const bookingSource = String(booking?.booking_source || '').toLowerCase();
+
+          let uiStatus = 'Available';
+          let statusState = 'available';
+
+          if (s.status === 'maintenance') {
+            uiStatus = 'Maintenance';
+            statusState = 'maintenance';
+          } else if (isUserBooked) {
+            uiStatus = 'Booked by You';
+            statusState = 'user_booked';
+          } else if (booking) {
+            if (bookingStatus === 'checked_in' || bookingStatus === 'active') {
+              uiStatus = 'Occupied';
+              statusState = 'occupied';
+            } else if (bookingSource.includes('waitlist') || bookingStatus === 'awaiting_check_in') {
+              uiStatus = 'Held';
+              statusState = 'held';
+            } else {
+              uiStatus = 'Reserved';
+              statusState = 'reserved';
+            }
+          }
+
+          const numStr = String(s.seat_number || '').replace(/^[A-Za-z]+-?/, '');
+          const seatNum = parseInt(numStr, 10) || 1;
+
+          return {
+            id: s.id,
+            seatNumber: s.seat_number ? (s.seat_number.startsWith('S-') ? s.seat_number : `S-${String(seatNum).padStart(2, '0')}`) : `S-${String(seatNum).padStart(2, '0')}`,
+            rawSeatNumber: s.seat_number,
+            type: s.seat_type || (seatNum <= 20 ? 'Quiet Study (Zone A)' : 'Collaborative (Zone B)'),
+            zoneId: seatNum <= 20 ? 'zone-a' : 'zone-b',
+            powerOutlet: s.has_power_socket ?? (seatNum % 2 === 1),
+            nearWindow: s.is_accessible ?? (seatNum <= 10 || (seatNum >= 21 && seatNum <= 30)),
+            isAccessible: Boolean(s.is_accessible),
+            ui_status: uiStatus,
+            status_state: statusState,
+            isUserBooked,
+            booking
+          };
+        });
       }
     } catch { /* fallback */ }
 
     // Fallback local db
-    const seats = (await db.read('seatsync_seats')) || [];
+    const rawSeats = (await db.read('seatsync_seats')) || [];
     const bookings = (await db.read('seatsync_bookings')) || [];
 
     const activeBookings = bookings.filter(b => 
@@ -207,13 +252,144 @@ export const bookingService = {
       (b.slotId === slotId || b.slot_id === slotId) &&
       !['cancelled', 'cancelled_by_student', 'cancelled_by_admin', 'slot_cancelled'].includes(String(b.status || '').toLowerCase())
     );
-    const bookedSeatIds = new Set(activeBookings.map(b => b.seatId || b.seat_id));
 
-    return seats.map(s => ({
-      ...s,
-      seatNumber: s.seatNumber || s.id,
-      ui_status: bookedSeatIds.has(s.id) ? 'Occupied' : (s.status === 'maintenance' ? 'Maintenance' : 'Available')
-    }));
+    const bookingMap = new Map();
+    activeBookings.forEach(b => {
+      const seatKey = b.seatId || b.seat_id;
+      if (seatKey) bookingMap.set(seatKey, b);
+    });
+
+    // Ensure all 40 seats S-01 to S-40 exist in mock list
+    const seatsList = rawSeats.length >= 40 ? rawSeats : Array.from({ length: 40 }, (_, i) => {
+      const num = i + 1;
+      const seatNo = `S-${String(num).padStart(2, '0')}`;
+      return {
+        id: `seat-${num}`,
+        seatNumber: seatNo,
+        status: num === 40 ? 'maintenance' : 'available',
+        has_power_socket: num % 2 === 1,
+        is_accessible: num <= 10 || (num >= 21 && num <= 30)
+      };
+    });
+
+    return seatsList.map((s, idx) => {
+      const num = idx + 1;
+      const seatNo = s.seatNumber ? (s.seatNumber.startsWith('S-') ? s.seatNumber : `S-${String(num).padStart(2, '0')}`) : `S-${String(num).padStart(2, '0')}`;
+      const booking = bookingMap.get(s.id) || bookingMap.get(seatNo);
+      const isUserBooked = Boolean(currentUserId && booking && String(booking.studentId || booking.student_id) === String(currentUserId));
+      const bookingStatus = String(booking?.status || '').toLowerCase();
+      const bookingSource = String(booking?.booking_source || '').toLowerCase();
+
+      let uiStatus = 'Available';
+      let statusState = 'available';
+
+      if (s.status === 'maintenance' || num === 40) {
+        uiStatus = 'Maintenance';
+        statusState = 'maintenance';
+      } else if (isUserBooked) {
+        uiStatus = 'Booked by You';
+        statusState = 'user_booked';
+      } else if (booking) {
+        if (bookingStatus === 'checked_in' || bookingStatus === 'active') {
+          uiStatus = 'Occupied';
+          statusState = 'occupied';
+        } else if (bookingSource.includes('waitlist') || bookingStatus === 'awaiting_check_in') {
+          uiStatus = 'Held';
+          statusState = 'held';
+        } else {
+          uiStatus = 'Reserved';
+          statusState = 'reserved';
+        }
+      }
+
+      return {
+        id: s.id || `seat-${num}`,
+        seatNumber: seatNo,
+        type: num <= 20 ? 'Quiet Study (Zone A)' : 'Collaborative (Zone B)',
+        zoneId: num <= 20 ? 'zone-a' : 'zone-b',
+        powerOutlet: s.has_power_socket ?? (num % 2 === 1),
+        nearWindow: num <= 10 || (num >= 21 && num <= 30),
+        isAccessible: Boolean(s.is_accessible),
+        ui_status: uiStatus,
+        status_state: statusState,
+        isUserBooked,
+        booking
+      };
+    });
+  },
+
+  async getWalkInSeatsForSlot(roomId, dateStr, slotId) {
+    if (isUUID(roomId) && isUUID(slotId)) {
+      try {
+        const { data, error } = await supabase.rpc('get_walk_in_available_seats', {
+          p_room_id: roomId,
+          p_booking_date: dateStr,
+          p_slot_id: slotId
+        });
+        if (!error && data && data.length > 0) return data;
+      } catch { /* fallback */ }
+    }
+
+    // Local fallback for S-41 to S-50
+    const rawSeats = (await db.read('seatsync_seats')) || [];
+    const bookings = (await db.read('seatsync_bookings')) || [];
+
+    const activeBookings = bookings.filter(b => 
+      b.bookingDate === dateStr &&
+      (b.slotId === slotId || b.slot_id === slotId) &&
+      !['cancelled', 'cancelled_by_student', 'cancelled_by_admin', 'slot_cancelled'].includes(String(b.status || '').toLowerCase())
+    );
+
+    const bookingMap = new Map();
+    activeBookings.forEach(b => {
+      const seatKey = b.seatId || b.seat_id;
+      if (seatKey) bookingMap.set(seatKey, b);
+    });
+
+    const walkInSeatsList = Array.from({ length: 10 }, (_, i) => {
+      const num = i + 41;
+      const seatNo = `S-${num}`;
+      return {
+        id: `seat-${num}`,
+        seat_number: seatNo,
+        allocation_mode: 'walk_in_only',
+        status: 'available',
+        has_power_socket: true,
+        is_accessible: false
+      };
+    });
+
+    return walkInSeatsList.map(s => {
+      const booking = bookingMap.get(s.id) || bookingMap.get(s.seat_number);
+      let computedStatus = 'available';
+      if (s.status === 'maintenance') {
+        computedStatus = 'maintenance';
+      } else if (booking) {
+        const statusStr = String(booking.status || '').toLowerCase();
+        if (statusStr === 'checked_in' || statusStr === 'active') {
+          computedStatus = 'checked_in';
+        } else {
+          computedStatus = 'allocated';
+        }
+      }
+
+      return {
+        id: s.id,
+        seat_number: s.seat_number,
+        allocation_mode: 'walk_in_only',
+        physical_status: s.status,
+        has_power_socket: s.has_power_socket,
+        is_accessible: s.is_accessible,
+        computed_status: computedStatus,
+        active_booking: booking ? {
+          id: booking.id,
+          booking_code: booking.bookingCode || booking.booking_code,
+          student_id: booking.studentId || booking.student_id,
+          status: booking.status,
+          booking_source: booking.bookingSource || 'walk_in'
+        } : null
+      };
+    });
   },
 
   async getBookingsForSlot(slotId, dateStr) {
@@ -244,10 +420,17 @@ export const bookingService = {
     );
   },
 
-  async createBooking(user, dateStr, slot, floorId, seatId) {
+  async createBooking(user, dateStr, slot, floorId, seatId, idempotencyKey = null) {
     if (!user || !user.id) {
       throw new Error('User authentication required.');
     }
+
+    const seatIdStr = String(seatId || '');
+    if (seatIdStr.includes('S-4') || seatIdStr.includes('S-50') || seatIdStr.includes('seat-4') || seatIdStr.includes('seat-50')) {
+      throw new Error('SEAT_NOT_AVAILABLE_FOR_ONLINE_BOOKING: Seat is reserved exclusively for desk walk-in allocation.');
+    }
+
+    const key = idempotencyKey || `IK-BK-${user.id}-${dateStr}-${seatId}-${Date.now()}`;
 
     try {
       let resolvedSlotId = slot?.id || slot;
@@ -299,7 +482,8 @@ export const bookingService = {
           p_seat_id: resolvedSeatId,
           p_slot_id: resolvedSlotId,
           p_booking_date: dateStr,
-          p_booking_source: 'online'
+          p_booking_source: 'online',
+          p_idempotency_key: key
         });
 
         if (error) throw new Error(error.message);
@@ -400,5 +584,70 @@ export const bookingService = {
     target.cancelledAt = new Date().toISOString();
     await db.write('seatsync_bookings', bookings);
     return target;
+  },
+
+  // Algorithm 18: Weighted Seat Recommendation Algorithm
+  getRecommendedSeats(availableSeats, preferences = {}) {
+    if (!availableSeats || availableSeats.length === 0) return [];
+
+    const {
+      preferPowerSocket = true,
+      preferQuietZone = true,
+      preferAccessible = false,
+      preferredZone = 'zone-a'
+    } = preferences;
+
+    const scoredSeats = availableSeats.map(seat => {
+      let score = 0;
+      if (seat.ui_status !== 'Available') return { ...seat, score: -1 };
+
+      if (preferPowerSocket && (seat.powerOutlet || seat.has_power_socket)) score += 30;
+      if (preferQuietZone && (seat.zoneId === preferredZone || seat.type?.includes('Quiet'))) score += 25;
+      if (preferAccessible && (seat.nearWindow || seat.is_accessible)) score += 20;
+
+      // Distance / seat ordering preference heuristic
+      const seatNumMatch = String(seat.seatNumber || seat.id).match(/\d+/);
+      const num = seatNumMatch ? parseInt(seatNumMatch[0], 10) : 0;
+      score += Math.max(0, 25 - (num % 10));
+
+      return { ...seat, score };
+    });
+
+    return scoredSeats
+      .filter(s => s.score >= 0)
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 3);
+  },
+
+  // Algorithm 20: Keyset/Cursor Pagination for Bookings
+  async getMyBookingsPaginated(studentId, lastCreatedAt = null, pageSize = 10) {
+    if (!studentId) return { data: [], hasMore: false, lastCursor: null };
+
+    if (isUUID(studentId)) {
+      try {
+        let query = supabase
+          .from('bookings')
+          .select('*, seats(seat_number), slots(name, start_time, end_time)')
+          .eq('student_id', studentId)
+          .order('created_at', { ascending: false })
+          .limit(pageSize + 1);
+
+        if (lastCreatedAt) {
+          query = query.lt('created_at', lastCreatedAt);
+        }
+
+        const { data, error } = await query;
+        if (!error && data) {
+          const hasMore = data.length > pageSize;
+          const items = hasMore ? data.slice(0, pageSize) : data;
+          const lastCursor = items.length > 0 ? items[items.length - 1].created_at : null;
+
+          return { data: items, hasMore, lastCursor };
+        }
+      } catch { /* fallback */ }
+    }
+
+    const all = await this.getMyBookings(studentId);
+    return { data: all.slice(0, pageSize), hasMore: all.length > pageSize, lastCursor: null };
   }
 };

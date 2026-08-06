@@ -1,6 +1,6 @@
-import { supabase, isUUID } from '../lib/supabase';
-import { db } from './mockDatabase';
-import { defaultSlots, defaultSeats } from '../data/seedData';
+import { supabase, isUUID } from '../lib/supabase.js';
+import { db } from './mockDatabase.js';
+import { defaultSlots, defaultSeats } from '../data/seedData.js';
 
 export function getTodayKolkataDate() {
   const options = { timeZone: 'Asia/Kolkata', year: 'numeric', month: '2-digit', day: '2-digit' };
@@ -210,12 +210,12 @@ export const occupancyService = {
         };
       });
 
-      // 4. Calculate Card Counts
       const totalCapacity = mergedSeats.length;
       const availableCount = mergedSeats.filter(s => s.displayStatus === 'available').length;
       const reservedCount = mergedSeats.filter(s => s.displayStatus === 'reserved').length;
       const occupiedCount = mergedSeats.filter(s => s.displayStatus === 'occupied').length;
       const maintenanceCount = mergedSeats.filter(s => s.displayStatus === 'maintenance').length;
+      const occupancyPercentage = totalCapacity > 0 ? Math.round((occupiedCount / totalCapacity) * 100) : 0;
 
       return {
         success: true,
@@ -225,7 +225,8 @@ export const occupancyService = {
         reservedCount,
         occupiedCount,
         maintenanceCount,
-        occupancyPercentage: totalCapacity > 0 ? Math.round((occupiedCount / totalCapacity) * 100) : 0
+        occupancyPercentage,
+        colorThreshold: this.getOccupancyColorClass(occupancyPercentage)
       };
     } catch (err) {
       console.warn('[occupancyService] Failed to load occupancy, using local fallback:', err);
@@ -248,8 +249,16 @@ export const occupancyService = {
         reservedCount: 0,
         occupiedCount: 0,
         maintenanceCount: 0,
-        occupancyPercentage: 0
+        occupancyPercentage: 0,
+        colorThreshold: 'green'
       };
     }
+  },
+
+  // Algorithm 17: Color-coded live occupancy threshold
+  getOccupancyColorClass(pct) {
+    if (pct >= 85) return 'red';
+    if (pct >= 60) return 'amber';
+    return 'green';
   }
 };

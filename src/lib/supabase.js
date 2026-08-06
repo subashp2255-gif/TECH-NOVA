@@ -1,7 +1,8 @@
 import { createClient } from '@supabase/supabase-js';
 
-const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || 'https://hftpwhuzfoawujspkmpf.supabase.co';
-const supabaseKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY || import.meta.env.VITE_SUPABASE_ANON_KEY || 'sb_publishable__QIBzlwOumqkB42mfDFXtw_kj8jKBie';
+const env = (typeof import.meta !== 'undefined' && import.meta.env) ? import.meta.env : {};
+const supabaseUrl = env.VITE_SUPABASE_URL || 'https://hftpwhuzfoawujspkmpf.supabase.co';
+const supabaseKey = env.VITE_SUPABASE_PUBLISHABLE_KEY || env.VITE_SUPABASE_ANON_KEY || 'sb_publishable__QIBzlwOumqkB42mfDFXtw_kj8jKBie';
 
 if (!supabaseUrl || !supabaseKey) {
   throw new Error('[SeatSync Critical Config Error] Missing VITE_SUPABASE_URL or VITE_SUPABASE_PUBLISHABLE_KEY / VITE_SUPABASE_ANON_KEY environment variables.');

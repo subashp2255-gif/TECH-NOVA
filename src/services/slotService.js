@@ -1,6 +1,6 @@
-import { supabase, isUUID } from '../lib/supabase';
-import { db } from './mockDatabase';
-import { notificationService } from './notificationService';
+import { supabase, isUUID } from '../lib/supabase.js';
+import { db } from './mockDatabase.js';
+import { notificationService } from './notificationService.js';
 
 export const slotService = {
   async getSlotByCode(slotCode) {

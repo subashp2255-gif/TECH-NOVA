@@ -1,9 +1,9 @@
-import { supabase } from '../lib/supabase';
-import { db } from './mockDatabase';
-import { bookingService } from './bookingService';
-import { waitlistService } from './waitlistService';
-import { slotService } from './slotService';
-import { getTodayKolkataDate } from './occupancyService';
+import { supabase, isUUID } from '../lib/supabase.js';
+import { db } from './mockDatabase.js';
+import { bookingService } from './bookingService.js';
+import { waitlistService } from './waitlistService.js';
+import { slotService } from './slotService.js';
+import { getTodayKolkataDate } from './occupancyService.js';
 
 export const librarianService = {
   // 1. DASHBOARD METRICS
@@ -211,12 +211,13 @@ export const librarianService = {
   // 7. SEAT MAINTENANCE
   async reportSeatMaintenance({ seatNumber, category, description, priority, expectedResolution, staffUser }) {
     try {
-      const { data: seatData } = await supabase.from('seats').select('id').eq('seat_number', seatNumber).single();
+      const { data: seatData } = await supabase.from('seats').select('id').or(`seat_number.eq.${seatNumber},id.eq.${seatNumber}`).maybeSingle();
       if (seatData) {
+        await supabase.from('seats').update({ status: 'maintenance' }).eq('id', seatData.id);
         const { data, error } = await supabase.rpc('set_seat_maintenance', {
           p_seat_id: seatData.id,
-          p_reason: description,
-          p_category: category,
+          p_reason: description || 'Flagged for maintenance',
+          p_category: category || 'Desk Maintenance',
           p_priority: priority || 'Medium'
         });
         if (!error && data && data.success) {
@@ -236,8 +237,8 @@ export const librarianService = {
     const ticket = {
       id: `MNT-${Date.now()}`,
       seatNumber,
-      category,
-      description,
+      category: category || 'Desk Maintenance',
+      description: description || 'Flagged for maintenance',
       priority: priority || 'Medium',
       reportedAt: new Date().toISOString(),
       status: 'Reported'
@@ -245,6 +246,28 @@ export const librarianService = {
     maintenanceList.push(ticket);
     await db.write('seatsync_maintenance', maintenanceList);
     return ticket;
+  },
+
+  async resolveSeatMaintenance(seatNumberOrId) {
+    try {
+      const { data: seatData } = await supabase.from('seats').select('id, seat_number').or(`seat_number.eq.${seatNumberOrId},id.eq.${seatNumberOrId}`).maybeSingle();
+      if (seatData) {
+        await supabase.from('seats').update({ status: 'available' }).eq('id', seatData.id);
+        await supabase.from('seat_maintenance').update({ status: 'Resolved' }).eq('seat_id', seatData.id);
+      }
+    } catch { /* fallback */ }
+
+    const seats = (await db.read('seatsync_seats')) || [];
+    const seatObj = seats.find(s => s.seatNumber === seatNumberOrId || String(s.id) === String(seatNumberOrId));
+    if (seatObj) {
+      seatObj.status = 'active';
+      await db.write('seatsync_seats', seats);
+    }
+
+    const maintenanceList = (await db.read('seatsync_maintenance')) || [];
+    const remaining = maintenanceList.filter(m => m.seatNumber !== seatNumberOrId && m.seat_id !== seatNumberOrId);
+    await db.write('seatsync_maintenance', remaining);
+    return true;
   },
 
   async updateMaintenanceStatus(ticketId, status, resolutionNotes, staffUser) {
@@ -302,5 +325,70 @@ export const librarianService = {
       await db.write('seatsync_handovers', handovers);
     }
     return handover || { id: handoverId, status: 'Acknowledged' };
+  },
+
+  // 10. WALK-IN ALLOCATION
+  async createWalkInBooking({ student, seat, slot, dateStr, staffUser, autoCheckIn = true, notes = '' }) {
+    if (student?.id && seat?.id && slot?.id && isUUID(student.id) && isUUID(seat.id) && isUUID(slot.id)) {
+      try {
+        const { data, error } = await supabase.rpc('allocate_walk_in_seat', {
+          p_student_id: student.id,
+          p_seat_id: seat.id,
+          p_slot_id: slot.id,
+          p_booking_date: dateStr,
+          p_perform_instant_check_in: autoCheckIn,
+          p_idempotency_key: `WK-IK-${student.id}-${dateStr}-${seat.id}-${Date.now()}`,
+          p_notes: notes
+        });
+
+        if (!error && data && data.success) {
+          return {
+            id: data.booking_id,
+            bookingCode: data.booking_code,
+            studentName: student.name || student.full_name || 'Student',
+            studentRegistrationNumber: student.collegeId || student.registration_number || 'N/A',
+            seatNumber: seat.seatNumber || seat.seat_number || 'S-41',
+            slotName: slot.name || slot.label || 'Time Slot',
+            bookingDate: dateStr,
+            status: autoCheckIn ? 'checked_in' : 'confirmed',
+            bookingSource: 'walk_in',
+            allocatedBy: staffUser?.name || 'Staff Librarian',
+            createdAt: new Date().toISOString()
+          };
+        }
+        if (error) throw new Error(error.message);
+      } catch (err) {
+        if (err.message && !err.message.includes('fetch') && !err.message.includes('RPC')) {
+          throw err;
+        }
+      }
+    }
+
+    const bookings = (await db.read('seatsync_bookings')) || [];
+    const bookingCode = `WK-${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
+
+    const newBooking = {
+      id: `booking-walkin-${Date.now()}`,
+      bookingCode,
+      studentId: student.id || student.collegeId || 'STD-LOCAL',
+      studentName: student.name || student.full_name || 'Student',
+      studentRegistrationNumber: student.collegeId || 'N/A',
+      studentEmail: student.email || '',
+      seatId: seat.id || seat.seatNumber,
+      seatNumber: seat.seatNumber || seat.seat_number || 'S-41',
+      slotId: slot.id,
+      slotName: slot.name || slot.label || 'Slot',
+      bookingDate: dateStr,
+      status: autoCheckIn ? 'checked_in' : 'confirmed',
+      bookingSource: 'walk_in',
+      allocatedBy: staffUser?.name || 'Staff Librarian',
+      createdAt: new Date().toISOString(),
+      checkedInAt: autoCheckIn ? new Date().toISOString() : null
+    };
+
+    bookings.push(newBooking);
+    await db.write('seatsync_bookings', bookings);
+    return newBooking;
   }
 };
+

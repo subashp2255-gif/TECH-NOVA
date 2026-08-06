@@ -1,5 +1,5 @@
-import { db } from './mockDatabase';
-import { bookingService } from './bookingService';
+import { db } from './mockDatabase.js';
+import { bookingService } from './bookingService.js';
 
 export const dashboardService = {
   async getStudentStats(studentId) {

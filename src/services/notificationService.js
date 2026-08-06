@@ -1,5 +1,5 @@
-import { supabase, isUUID } from '../lib/supabase';
-import { db } from './mockDatabase';
+import { supabase, isUUID } from '../lib/supabase.js';
+import { db } from './mockDatabase.js';
 
 export const notificationService = {
   async getNotifications(userId) {

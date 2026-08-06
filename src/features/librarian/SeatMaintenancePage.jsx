@@ -120,25 +120,18 @@ export default function SeatMaintenancePage() {
     try {
       const isCurrentlyMaintenance = seat.status === 'maintenance';
       if (isCurrentlyMaintenance) {
-        await supabase.from('seats').update({ status: 'available' }).eq('id', seat.id);
+        await librarianService.resolveSeatMaintenance(seat.seatNumber || seat.id);
+        toast.success(`Seat ${seat.seatNumber} activated! Live occupancy updated.`);
       } else {
         await librarianService.reportSeatMaintenance({
-          seatNumber: seat.seatNumber,
+          seatNumber: seat.seatNumber || seat.id,
           category: 'Desk Maintenance',
           description: 'Flagged for maintenance by librarian',
           priority: 'Medium'
         });
+        toast.success(`Seat ${seat.seatNumber} set under maintenance! Live occupancy updated.`);
       }
 
-      // Local fallback sync
-      const data = await db.read('seatsync_seats') || [];
-      const target = data.find(s => s.id === seat.id || s.seatNumber === seat.seatNumber);
-      if (target) {
-        target.status = isCurrentlyMaintenance ? 'active' : 'maintenance';
-        await db.write('seatsync_seats', data);
-      }
-
-      toast.success(`Seat ${seat.seatNumber} status updated.`);
       fetchSeats();
     } catch {
       toast.error('Failed to update seat status.');

@@ -68,16 +68,18 @@ export const defaultZones = [
   { id: 'zone-b', floorId: 'floor-g', name: 'Zone B', type: 'group', description: 'Collaborative Group Study', active: true }
 ];
 
-export const defaultSeats = Array.from({ length: 40 }, (_, i) => {
+export const defaultSeats = Array.from({ length: 50 }, (_, i) => {
   const num = i + 1;
   const zoneId = num <= 20 ? 'zone-a' : 'zone-b';
+  const allocationMode = num > 40 ? 'walk_in_only' : 'online';
   return {
     id: `SEAT-${num.toString().padStart(2, '0')}`,
     seatNumber: `S-${num.toString().padStart(2, '0')}`,
     floorId: 'floor-g',
     zoneId,
-    type: zoneId === 'zone-a' ? 'Quiet Study' : 'Group Discussion',
+    type: num > 40 ? 'Walk-In Reserved Pool' : (zoneId === 'zone-a' ? 'Quiet Study' : 'Group Discussion'),
     status: 'active',
+    allocationMode,
     powerOutlet: num % 2 === 0,
     nearWindow: num % 4 === 0
   };

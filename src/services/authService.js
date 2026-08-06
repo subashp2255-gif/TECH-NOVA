@@ -1,6 +1,6 @@
-import { supabase, isUUID } from '../lib/supabase';
-import { db } from './mockDatabase';
-import { ROLES, defaultUsers } from '../data/seedData';
+import { supabase, isUUID } from '../lib/supabase.js';
+import { db } from './mockDatabase.js';
+import { ROLES, defaultUsers } from '../data/seedData.js';
 
 export function parseErrorMessage(err, fallbackMsg = 'An unexpected error occurred. Please try again.') {
   if (!err) return fallbackMsg;

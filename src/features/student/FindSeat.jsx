@@ -14,6 +14,7 @@ import {
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import WaitlistModal from '../../components/student/WaitlistModal';
+import SeatMapCard from '../../components/student/SeatMapCard';
 
 function format12HourTime(timeStr) {
   if (!timeStr) return '';
@@ -112,10 +113,10 @@ export default function FindSeat() {
       const seatsData = await bookingService.getSeatsForSlot(
         selectedFloor.id,
         tomorrowDate,
-        selectedSlot.id
+        selectedSlot.id,
+        user?.id
       );
       setSeats(seatsData);
-      setSelectedSeat(null);
     } catch (error) {
       toast.error('Failed to load seats map.');
     } finally {
@@ -129,13 +130,9 @@ export default function FindSeat() {
     }
   }, [selectedSlot, selectedFloor]);
 
-  const handleSeatClick = (seat) => {
-    if (seat.ui_status !== 'Available') return;
-    setSelectedSeat(seat);
-  };
-
-  const handleConfirmBooking = async () => {
-    if (!selectedSlot || !selectedFloor || !selectedSeat || !user) return;
+  const handleConfirmSeatBooking = async (targetSeat) => {
+    const seatToBook = targetSeat || selectedSeat;
+    if (!selectedSlot || !selectedFloor || !seatToBook || !user) return;
     setBookingLoading(true);
     try {
       await bookingService.createBooking(
@@ -143,19 +140,27 @@ export default function FindSeat() {
         tomorrowDate,
         selectedSlot,
         selectedFloor.id,
-        selectedSeat.id
+        seatToBook.id
       );
-      toast.success(`Seat ${selectedSeat.seatNumber} successfully booked!`);
+      toast.success(`Seat ${seatToBook.seatNumber} successfully booked! Reservation confirmed.`);
       setConfirmModalOpen(false);
       setSelectedSeat(null);
       setSelectedSlot(null);
       fetchInitialData();
     } catch (error) {
-      toast.error(error.message || 'Failed to complete booking.');
+      if (error.message?.includes('already') || error.message?.includes('booked') || error.message?.includes('taken') || error.message?.includes('occupied')) {
+        toast.error('This seat was just booked by another student. Please select another available seat.');
+        setSelectedSeat(null);
+        fetchSeats();
+      } else {
+        toast.error(error.message || 'Failed to complete booking.');
+      }
     } finally {
       setBookingLoading(false);
     }
   };
+
+  const handleConfirmBooking = () => handleConfirmSeatBooking(selectedSeat);
 
   const filteredSeats = useMemo(() => {
     if (selectedZone === 'ALL') return seats;
@@ -406,107 +411,34 @@ export default function FindSeat() {
           )}
         </div>
       ) : (
-        /* 2. SEAT MAP SELECTION */
+        /* 2. ENHANCED INTERACTIVE SEAT MAP SELECTION */
         <div className="space-y-6">
-          <div className="flex flex-wrap items-center justify-between gap-4 bg-white p-4 rounded-2xl border border-slate-200 shadow-xs">
-            <div className="flex items-center gap-3">
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => { setSelectedSlot(null); setSelectedSeat(null); }}
-                className="text-xs font-bold rounded-xl"
-              >
-                ← Change Slot
-              </Button>
-              <div>
-                <h3 className="text-sm font-bold text-navy">{selectedSlot.label}</h3>
-                <p className="text-[11px] text-slate-500 font-mono">
-                  {format12HourTime(selectedSlot.startTime)} – {format12HourTime(selectedSlot.endTime)}
-                </p>
-              </div>
-            </div>
-
-            <div className="flex items-center gap-2">
-              <span className="text-xs text-slate-500 font-semibold">Zone:</span>
-              <button
-                onClick={() => setSelectedZone('ALL')}
-                className={`px-3 py-1 rounded-xl text-xs font-bold transition-all ${selectedZone === 'ALL' ? 'bg-navy text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}
-              >
-                All Zones
-              </button>
-              <button
-                onClick={() => setSelectedZone('zone-a')}
-                className={`px-3 py-1 rounded-xl text-xs font-bold transition-all ${selectedZone === 'zone-a' ? 'bg-navy text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}
-              >
-                Zone A (Quiet)
-              </button>
-              <button
-                onClick={() => setSelectedZone('zone-b')}
-                className={`px-3 py-1 rounded-xl text-xs font-bold transition-all ${selectedZone === 'zone-b' ? 'bg-navy text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}
-              >
-                Zone B (Group)
-              </button>
-            </div>
+          <div className="flex items-center justify-between">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => { setSelectedSlot(null); setSelectedSeat(null); }}
+              className="text-xs font-bold rounded-2xl h-9 border-slate-300 hover:bg-slate-100 flex items-center gap-1.5"
+            >
+              ← Change Time Slot
+            </Button>
           </div>
 
-          <Card className="border border-slate-200/90 rounded-2xl bg-white p-6 space-y-6">
-            <div className="flex items-center justify-between border-b border-slate-100 pb-4">
-              <h3 className="text-base font-bold text-navy flex items-center gap-2">
-                <MapPin size={18} className="text-brandBlue" /> Select Seat on Ground Floor
-              </h3>
-              <div className="flex items-center gap-4 text-xs font-medium">
-                <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded-md bg-emerald-100 border border-emerald-400" /> Available</span>
-                <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded-md bg-brandBlue" /> Selected</span>
-                <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded-md bg-slate-200" /> Occupied</span>
-              </div>
-            </div>
-
-            {loadingSeats ? (
-              <div className="p-12 text-center text-xs text-slate-400 animate-pulse">Loading interactive seat map...</div>
-            ) : (
-              <div className="grid grid-cols-4 sm:grid-cols-8 md:grid-cols-10 gap-3">
-                {filteredSeats.map(seat => {
-                  const isAvailable = seat.ui_status === 'Available';
-                  const isSelected = selectedSeat?.id === seat.id;
-
-                  return (
-                    <button
-                      key={seat.id}
-                      disabled={!isAvailable}
-                      onClick={() => handleSeatClick(seat)}
-                      className={`
-                        h-12 rounded-xl flex flex-col items-center justify-center border text-xs font-bold transition-all
-                        ${!isAvailable
-                          ? 'bg-slate-100 text-slate-400 border-slate-200 cursor-not-allowed'
-                          : isSelected
-                            ? 'bg-brandBlue text-white border-brandBlue ring-2 ring-brandBlue/30 shadow-md scale-105'
-                            : 'bg-emerald-50 text-emerald-800 border-emerald-300 hover:bg-emerald-100 hover:-translate-y-0.5'
-                        }
-                      `}
-                    >
-                      <span>{seat.seatNumber}</span>
-                      <span className="text-[9px] font-normal opacity-80">{seat.zoneId === 'zone-a' ? 'A' : 'B'}</span>
-                    </button>
-                  );
-                })}
-              </div>
-            )}
-
-            {selectedSeat && (
-              <div className="bg-blue-50/80 border border-blue-200 rounded-2xl p-4 flex items-center justify-between animate-in fade-in">
-                <div>
-                  <h4 className="text-sm font-bold text-navy">Selected: Seat {selectedSeat.seatNumber}</h4>
-                  <p className="text-xs text-slate-500 font-medium">{selectedSeat.type} • Ground Floor</p>
-                </div>
-                <Button
-                  onClick={() => setConfirmModalOpen(true)}
-                  className="bg-brandBlue hover:bg-blue-700 text-white font-bold h-10 px-6 rounded-xl text-xs"
-                >
-                  Confirm & Reserve Pass →
-                </Button>
-              </div>
-            )}
-          </Card>
+          <SeatMapCard
+            floor={selectedFloor}
+            slot={selectedSlot}
+            dateStr={tomorrowDate}
+            seats={seats}
+            loadingSeats={loadingSeats}
+            selectedSeat={selectedSeat}
+            onSelectSeat={setSelectedSeat}
+            onConfirmBooking={handleConfirmSeatBooking}
+            bookingLoading={bookingLoading}
+            onRefresh={fetchSeats}
+            isSlotCancelled={getSlotStatusInfo(selectedSlot).isSlotCancelled}
+            user={user}
+          />
         </div>
       )}
 
