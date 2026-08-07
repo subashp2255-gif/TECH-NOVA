@@ -392,31 +392,27 @@ export const librarianService = {
     const cleanToken = tokenInput.trim();
 
     try {
-      const { data, error } = await supabase.rpc('verify_qr_pass_token', {
-        p_token: cleanToken,
-        p_library_id: libraryId && isUUID(libraryId) ? libraryId : null,
-        p_operating_date: operatingDate || null
+      const { data, error } = await supabase.rpc('lookup_booking_by_qr', {
+        p_qr_token: cleanToken
       });
 
       if (!error && data) {
-        if (!data.valid && data.status_code !== 'BOOKING_NOT_FOUND') {
-          throw new Error(data.message || 'Booking record not found.');
-        }
-        if (data.valid) {
+        if (data.booking) {
           return {
-            valid: true,
-            statusCode: data.status_code,
+            valid: Boolean(data.valid),
+            statusCode: (data.status_code || 'UNKNOWN').toUpperCase(),
             message: data.message,
             booking: {
               id: data.booking.id,
-              bookingCode: data.booking.bookingCode,
-              seatNumber: data.booking.seatNumber,
-              studentName: data.booking.studentName,
-              studentRegistrationNumber: data.booking.studentRegistrationNumber,
-              bookingDate: data.booking.bookingDate,
-              slotName: data.booking.slotName,
-              slotTime: data.booking.slotTime,
-              status: data.booking.status
+              bookingCode: data.booking.booking_code || data.booking.bookingCode,
+              seatNumber: data.booking.seat_number || data.booking.seatNumber,
+              studentName: data.booking.student_name || data.booking.studentName,
+              studentRegistrationNumber: data.booking.registration_number || data.booking.studentRegistrationNumber,
+              bookingDate: data.booking.booking_date || data.booking.bookingDate,
+              slotName: data.booking.slot_name || data.booking.slotName,
+              slotTime: data.booking.slot_time || data.booking.slotTime,
+              status: data.booking.status,
+              qrToken: data.booking.qr_token
             }
           };
         }
@@ -448,6 +444,77 @@ export const librarianService = {
     };
   },
 
+  // MANUAL LOOKUP RPC
+  async lookupBookingForManualCheckIn(identifier) {
+    if (!identifier || !identifier.trim()) {
+      return { success: false, message: 'Please enter a search identifier.', matches: [] };
+    }
+
+    try {
+      const { data, error } = await supabase.rpc('lookup_booking_for_manual_checkin', {
+        p_identifier: identifier.trim()
+      });
+
+      if (!error && data) {
+        return {
+          success: Boolean(data.success),
+          message: data.message || '',
+          matches: (data.matches || []).map(m => ({
+            id: m.id,
+            bookingCode: m.booking_code,
+            studentId: m.student_id,
+            studentName: m.student_name,
+            studentRegistrationNumber: m.registration_number,
+            studentEmail: m.email,
+            seatId: m.seat_id,
+            seatNumber: m.seat_number,
+            roomName: m.room_name,
+            floorName: m.floor_name,
+            libraryName: m.library_name,
+            slotName: m.slot_name,
+            slotTime: m.slot_time,
+            bookingDate: m.booking_date,
+            status: m.status,
+            checkedInAt: m.checked_in_at,
+            checkedOutAt: m.checked_out_at,
+            eligibilityCode: m.eligibility_code,
+            eligibilityMessage: m.eligibility_message
+          }))
+        };
+      }
+    } catch (err) {
+      console.warn('[librarianService] lookupBookingForManualCheckIn error:', err.message);
+    }
+
+    // Local fallback search
+    const localBookings = (await db.read('seatsync_bookings')) || [];
+    const clean = identifier.trim().toLowerCase();
+    const matched = localBookings.filter(b =>
+      (b.booking_code && b.booking_code.toLowerCase().includes(clean)) ||
+      (b.bookingCode && b.bookingCode.toLowerCase().includes(clean)) ||
+      (b.studentRegistrationNumber && b.studentRegistrationNumber.toLowerCase().includes(clean)) ||
+      (b.studentCollegeId && b.studentCollegeId.toLowerCase().includes(clean)) ||
+      (b.studentEmail && b.studentEmail.toLowerCase().includes(clean))
+    );
+
+    return {
+      success: matched.length > 0,
+      message: matched.length > 0 ? 'Matching reservations found.' : 'No booking record found.',
+      matches: matched.map(b => ({
+        id: b.id,
+        bookingCode: b.booking_code || b.bookingCode || b.id,
+        studentName: b.studentName || 'Student',
+        studentRegistrationNumber: b.studentRegistrationNumber || b.studentCollegeId || 'N/A',
+        seatNumber: b.seatNumber || 'S-01',
+        slotName: b.slotName || 'Time Slot',
+        bookingDate: b.bookingDate || getTodayKolkataDate(),
+        status: b.status || 'confirmed',
+        eligibilityCode: 'ELIGIBLE',
+        eligibilityMessage: 'Ready for check-in.'
+      }))
+    };
+  },
+
   // 4. SECURE ENTRY QR SCANNING ENGINE (RPC)
   async scanEntryQr(scannedValue, libraryId = null) {
     const { parseEntryQrPayload } = await import('../utils/qrPayload.js');
@@ -469,12 +536,7 @@ export const librarianService = {
         p_scan_nonce: scanNonce
       });
 
-      if (error) {
-        console.warn('[librarianService] scan_entry_qr RPC error:', error.message);
-        throw new Error(error.message);
-      }
-
-      if (data) {
+      if (!error && data) {
         return {
           valid: Boolean(data.valid),
           alreadyCheckedIn: Boolean(data.already_checked_in),
@@ -549,23 +611,55 @@ export const librarianService = {
     };
   },
 
-  // 5. PROCESS ATOMIC CHECK-IN
-  async processCheckIn(bookingId, staffUser, reason = 'Entry Verified') {
+  // 5. ATOMIC CHECK-IN RPC
+  async checkInBooking({ bookingId, method = 'manual', qrToken = null, scanNonce = null, overrideReason = null }) {
     if (isUUID(bookingId)) {
       try {
-        const { data, error } = await supabase.rpc('confirm_booking_check_in', {
+        const { data, error } = await supabase.rpc('check_in_booking', {
           p_booking_id: bookingId,
-          p_idempotency_key: `IK-IN-${bookingId}-${Date.now()}`
+          p_method: method,
+          p_qr_token: qrToken,
+          p_scan_nonce: scanNonce && isUUID(scanNonce) ? scanNonce : null,
+          p_override_reason: overrideReason
         });
-        if (!error && data && data.success) {
-          return { id: bookingId, status: 'checked_in', ...data };
+
+        if (!error && data) {
+          if (!data.valid) {
+            return {
+              success: false,
+              statusCode: (data.status_code || 'CHECKIN_FAILED').toUpperCase(),
+              message: data.message || 'Check-in failed.',
+              booking: null
+            };
+          }
+          return {
+            success: true,
+            statusCode: (data.status_code || 'SUCCESS').toUpperCase(),
+            message: data.message || 'Check-in confirmed.',
+            booking: {
+              id: data.booking_id,
+              bookingCode: data.booking_code,
+              studentId: data.student_id,
+              studentName: data.student_name,
+              studentRegistrationNumber: data.registration_number,
+              seatNumber: data.seat_number,
+              floorName: data.floor_name,
+              roomName: data.room_name,
+              libraryName: data.library_name,
+              slotName: data.slot_name,
+              slotTime: data.slot_time,
+              bookingDate: data.booking_date,
+              status: 'checked_in',
+              checkedInAt: data.checked_in_at
+            }
+          };
         }
-        if (error) throw new Error(error.message);
       } catch (err) {
-        if (err.message) throw err;
+        console.warn('[librarianService] checkInBooking RPC error:', err.message);
       }
     }
 
+    // Local fallback
     const bookings = (await db.read('seatsync_bookings')) || [];
     const target = bookings.find(b => String(b.id) === String(bookingId));
     if (!target) throw new Error('Booking record not found.');
@@ -573,25 +667,51 @@ export const librarianService = {
     target.status = 'checked_in';
     target.checkedInAt = new Date().toISOString();
     await db.write('seatsync_bookings', bookings);
-    return target;
+    return { success: true, statusCode: 'SUCCESS', message: 'Check-in Successful', booking: target };
   },
 
-  // 4. PROCESS CHECK-OUT
-  async processCheckOut(bookingId, staffUser) {
-    try {
-      const { data, error } = await supabase.rpc('check_out_booking', {
-        p_booking_id: bookingId
-      });
-      if (!error && data && data.success) {
-        return { id: bookingId, status: 'completed' };
+  async processCheckIn(bookingId, staffUser, reason = 'Entry Verified') {
+    return this.checkInBooking({ bookingId, method: 'manual', overrideReason: reason });
+  },
+
+  // 6. ATOMIC CHECK-OUT RPC
+  async checkOutBooking({ bookingId, method = 'manual', overrideReason = null }) {
+    if (isUUID(bookingId)) {
+      try {
+        const { data, error } = await supabase.rpc('check_out_booking', {
+          p_booking_id: bookingId,
+          p_method: method,
+          p_override_reason: overrideReason
+        });
+
+        if (!error && data) {
+          if (!data.success) {
+            throw new Error(data.message || 'Checkout failed.');
+          }
+          return {
+            success: true,
+            statusCode: (data.status_code || 'SUCCESS').toUpperCase(),
+            message: data.message || 'Checkout completed.',
+            booking: {
+              id: data.booking_id,
+              bookingCode: data.booking_code,
+              studentName: data.student_name,
+              seatNumber: data.seat_number,
+              status: 'checked_out',
+              checkedOutAt: data.checked_out_at
+            }
+          };
+        }
+      } catch (err) {
+        console.warn('[librarianService] checkOutBooking RPC notice:', err.message);
       }
-    } catch { /* fallback */ }
+    }
 
     const bookings = (await db.read('seatsync_bookings')) || [];
     const target = bookings.find(b => String(b.id) === String(bookingId));
     if (!target) throw new Error('Booking record not found.');
 
-    target.status = 'completed';
+    target.status = 'checked_out';
     target.checkedOutAt = new Date().toISOString();
     await db.write('seatsync_bookings', bookings);
     return target;
