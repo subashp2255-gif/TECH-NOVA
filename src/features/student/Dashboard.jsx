@@ -1,10 +1,13 @@
 import React, { useEffect, useState, useMemo, useCallback } from 'react';
 import { useAuth } from '../../auth/AuthProvider';
+import { supabase } from '../../lib/supabase';
 import { dashboardService } from '../../services/dashboardService';
 import { bookingService } from '../../services/bookingService';
 import { waitlistService } from '../../services/waitlistService';
 import { db } from '../../services/mockDatabase';
 import { useSync } from '../../hooks/useSync';
+import { QRCodeCanvas } from 'qrcode.react';
+import { buildEntryQrPayload } from '../../utils/qrPayload.js';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '../../components/shared/Card';
 import { Button } from '../../components/shared/Button';
 import { Badge } from '../../components/shared/Badge';
@@ -24,6 +27,7 @@ import WaitlistModal from '../../components/student/WaitlistModal';
 function getBookingState(booking) {
     if (!booking) return null;
     const rawStatus = (booking.status || '').toLowerCase();
+    if (rawStatus === 'checked_in') return 'CHECKED_IN';
     if (rawStatus === 'completed' || rawStatus === 'checked_out') return 'COMPLETED';
     if (rawStatus === 'cancelled') return 'CANCELLED';
     if (rawStatus === 'checkout_pending') return 'CHECKOUT_PENDING';
@@ -610,10 +614,13 @@ export default function Dashboard() {
                             <CardHeader className="bg-gradient-to-r from-blue-50/80 to-slate-50 border-b border-slate-200/80 pb-4">
                                 <div className="flex flex-wrap items-center justify-between gap-2">
                                     <div className="flex items-center gap-2">
-                                        <Badge className="bg-brandBlue text-white font-bold text-xs px-3 py-1">
-                                            {bookingState === 'ACTIVE' ? 'Active Session' : 'Upcoming Pass'}
+                                        <Badge className={`font-bold text-xs px-3 py-1 text-white ${
+                                            bookingState === 'CHECKED_IN' ? 'bg-emerald-600' :
+                                            bookingState === 'ACTIVE' ? 'bg-brandBlue' : 'bg-slate-700'
+                                        }`}>
+                                            {bookingState === 'CHECKED_IN' ? '✓ CHECKED IN' : bookingState === 'ACTIVE' ? 'Active Session' : 'Upcoming Pass'}
                                         </Badge>
-                                        <span className="text-xs font-mono font-bold text-slate-500">ID: {activeOrUpcoming.id}</span>
+                                        <span className="text-xs font-mono font-bold text-slate-500">ID: {activeOrUpcoming.bookingCode || activeOrUpcoming.id}</span>
                                     </div>
                                     <span className="text-xs font-bold text-slate-600 font-mono">
                                         Date: {activeOrUpcoming.bookingDate}
@@ -645,12 +652,18 @@ export default function Dashboard() {
 
                                 {/* QR Pass Expansion */}
                                 {expandedQrBookingId === activeOrUpcoming.id && (
-                                    <div className="p-5 bg-blue-50/60 border border-blue-200 rounded-2xl text-center space-y-4 animate-in fade-in duration-200">
+                                    <div className="p-5 bg-blue-50/60 border border-blue-200 rounded-2xl text-center space-y-4 animate-in fade-in duration-200 flex flex-col items-center">
                                         <div className="bg-white p-4 rounded-xl border border-slate-200 inline-block shadow-sm">
-                                            <QrCode size={140} className="text-navy mx-auto" />
+                                            <QRCodeCanvas
+                                                id={`qr-canvas-dash-${activeOrUpcoming.id}`}
+                                                value={buildEntryQrPayload(activeOrUpcoming.qrToken || activeOrUpcoming.id)}
+                                                size={160}
+                                                level="H"
+                                                includeMargin={true}
+                                            />
                                         </div>
-                                        <div className="space-y-1">
-                                            <p className="text-xs font-bold text-navy font-mono">PASS-TOKEN: {activeOrUpcoming.id}-ENTRY</p>
+                                        <div className="space-y-1 text-center">
+                                            <p className="text-xs font-bold text-navy font-mono">TOKEN: {activeOrUpcoming.qrToken || activeOrUpcoming.id}</p>
                                             <p className="text-[11px] text-slate-500 font-medium">Show this pass to the librarian at the entrance desk.</p>
                                         </div>
                                     </div>
@@ -668,7 +681,7 @@ export default function Dashboard() {
                                         {expandedQrBookingId === activeOrUpcoming.id ? 'Hide Entry Pass' : 'View Entry Pass'}
                                     </Button>
 
-                                    {bookingState === 'ACTIVE' ? (
+                                    {bookingState === 'CHECKED_IN' || bookingState === 'ACTIVE' ? (
                                         <Button
                                             type="button"
                                             onClick={() => handleRequestCheckout(activeOrUpcoming)}

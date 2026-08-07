@@ -51,17 +51,27 @@ BEGIN
     -- Extract token if URI or JSON passed
     IF v_clean_token LIKE 'seatsync://entry?%' THEN
         v_extracted_token := COALESCE(SUBSTRING(v_clean_token FROM '[?&]token=([^&]+)'), v_clean_token);
+    ELSIF v_clean_token LIKE '{"%' THEN
+        BEGIN
+            v_extracted_token := COALESCE((v_clean_token::jsonb)->>'token', v_clean_token);
+        EXCEPTION WHEN OTHERS THEN
+            v_extracted_token := v_clean_token;
+        END;
     ELSE
         v_extracted_token := v_clean_token;
     END IF;
 
-    -- LOOKUP FIRST
+    -- LOOKUP FIRST with flexible token/id/code matching
     SELECT b.* INTO v_booking
     FROM public.bookings b
     WHERE b.qr_token = v_extracted_token
        OR b.qr_token = v_clean_token
        OR b.id::text = v_clean_token
-       OR UPPER(b.booking_code) = UPPER(v_clean_token);
+       OR b.id::text = v_extracted_token
+       OR b.id::text = REPLACE(v_clean_token, '-ENTRY', '')
+       OR b.id::text = REPLACE(v_extracted_token, '-ENTRY', '')
+       OR UPPER(b.booking_code) = UPPER(v_clean_token)
+       OR UPPER(b.booking_code) = UPPER(v_extracted_token);
 
     IF v_booking.id IS NULL THEN
         RETURN jsonb_build_object(
@@ -149,6 +159,7 @@ AS $$
 DECLARE
     v_staff_id UUID := auth.uid();
     v_clean TEXT := TRIM(COALESCE(p_identifier, ''));
+    v_extracted TEXT := REPLACE(v_clean, '-ENTRY', '');
     v_kolkata_today DATE := (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Kolkata')::DATE;
     v_kolkata_now TIME := (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Kolkata')::TIME;
     v_candidates JSONB;
@@ -212,6 +223,7 @@ BEGIN
     WHERE UPPER(b.booking_code) = UPPER(v_clean)
        OR b.qr_token = v_clean
        OR b.id::text = v_clean
+       OR b.id::text = v_extracted
        OR UPPER(p.registration_number) = UPPER(v_clean)
        OR LOWER(p.email) = LOWER(v_clean)
        OR p.department ILIKE v_clean;
@@ -288,13 +300,6 @@ BEGIN
 
     IF v_booking.id IS NULL THEN
         RETURN jsonb_build_object('valid', false, 'status_code', 'booking_not_found', 'message', 'Booking record not found.');
-    END IF;
-
-    -- Check QR token exact match if method is qr
-    IF p_method = 'qr' AND p_qr_token IS NOT NULL THEN
-        IF v_booking.qr_token != TRIM(p_qr_token) AND v_booking.id::text != TRIM(p_qr_token) AND UPPER(v_booking.booking_code) != UPPER(TRIM(p_qr_token)) THEN
-            RETURN jsonb_build_object('valid', false, 'status_code', 'invalid_qr', 'message', 'QR token does not match selected booking.');
-        END IF;
     END IF;
 
     SELECT * INTO v_student FROM public.profiles WHERE id = v_booking.student_id;
@@ -587,7 +592,11 @@ $$;
 DROP FUNCTION IF EXISTS public.get_current_occupants CASCADE;
 
 CREATE OR REPLACE FUNCTION public.get_current_occupants(
-    p_library_id UUID DEFAULT NULL
+    p_library_id UUID DEFAULT NULL,
+    p_floor_id UUID DEFAULT NULL,
+    p_room_id UUID DEFAULT NULL,
+    p_slot_id UUID DEFAULT NULL,
+    p_booking_date DATE DEFAULT NULL
 )
 RETURNS TABLE (
     booking_id UUID,
@@ -640,6 +649,10 @@ BEGIN
       AND b.checked_in_at IS NOT NULL
       AND b.checked_out_at IS NULL
       AND (p_library_id IS NULL OR b.library_id = p_library_id)
+      AND (p_floor_id IS NULL OR b.floor_id = p_floor_id)
+      AND (p_room_id IS NULL OR b.room_id = p_room_id)
+      AND (p_slot_id IS NULL OR b.slot_id = p_slot_id)
+      AND (p_booking_date IS NULL OR b.booking_date = p_booking_date)
     ORDER BY b.checked_in_at DESC;
 END;
 $$;
@@ -649,4 +662,4 @@ GRANT EXECUTE ON FUNCTION public.lookup_booking_by_qr(TEXT) TO authenticated, an
 GRANT EXECUTE ON FUNCTION public.lookup_booking_for_manual_checkin(TEXT) TO authenticated, anon;
 GRANT EXECUTE ON FUNCTION public.check_in_booking(UUID, TEXT, TEXT, UUID, TEXT) TO authenticated, anon;
 GRANT EXECUTE ON FUNCTION public.check_out_booking(UUID, TEXT, TEXT) TO authenticated, anon;
-GRANT EXECUTE ON FUNCTION public.get_current_occupants(UUID) TO authenticated, anon;
+GRANT EXECUTE ON FUNCTION public.get_current_occupants(UUID, UUID, UUID, UUID, DATE) TO authenticated, anon;
