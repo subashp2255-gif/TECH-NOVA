@@ -3,9 +3,6 @@
  * 
  * Canonical Format:
  * seatsync://entry?v=1&token=<stored_qr_token>
- * 
- * Compatible JSON Format:
- * {"v": 1, "type": "entry", "token": "<stored_qr_token>"}
  */
 
 /**
@@ -22,72 +19,92 @@ export function buildEntryQrPayload(qrToken) {
 }
 
 /**
- * Parses any scanned QR payload and extracts the clean stored_qr_token string.
- * Supports canonical URI, JSON objects, and legacy fallback strings.
+ * Helper to log masked tokens in development mode only
+ */
+function logMaskedTokenInDev(rawInput, extractedToken) {
+  try {
+    const isDev = (typeof process !== 'undefined' && process.env?.NODE_ENV !== 'production') || 
+                  (typeof import.meta !== 'undefined' && import.meta.env?.DEV);
+    if (isDev && extractedToken) {
+      const str = String(extractedToken);
+      const prefix = str.length > 4 ? str.slice(0, 4) : str;
+      const suffix = str.length > 8 ? str.slice(-4) : '****';
+      console.debug('[QRParser] Decoded Masked Token:', {
+        token_prefix: prefix,
+        token_length: str.length,
+        token_suffix: suffix
+      });
+    }
+  } catch { /* ignore logging errors */ }
+}
+
+/**
+ * Parses any scanned QR payload and extracts the clean stored qr_token string.
+ * Supports canonical URI (seatsync://entry?v=1&token=...), JSON objects, and raw tokens.
  * 
  * @param {string} scannedValue - Raw decoded string from QR scanner/camera
- * @returns {string|null} Extracted token string, or null if unparseable/empty
+ * @returns {string} Extracted token string
+ * @throws {Error} INVALID_QR_FORMAT, UNSUPPORTED_QR_VERSION, MISSING_QR_TOKEN
  */
 export function parseEntryQrPayload(scannedValue) {
-  if (!scannedValue || typeof scannedValue !== 'string') {
-    return null;
+  const raw = String(scannedValue || '').trim();
+  if (!raw) {
+    throw new Error('MISSING_QR_TOKEN');
   }
 
-  const trimmed = scannedValue.trim();
-  if (!trimmed) return null;
+  let extractedToken = null;
 
-  // Development mode logging (does not expose full tokens in production)
-  if (process.env.NODE_ENV !== 'production') {
-    const preview = trimmed.length > 25 ? `${trimmed.slice(0, 22)}...` : trimmed;
-    console.debug('[QRParser] Decoded raw payload preview:', preview);
-  }
-
-  // 1. Check Canonical URI: seatsync://entry?v=1&token=...
-  if (trimmed.startsWith('seatsync://')) {
+  // 1. Check Canonical URI format
+  if (raw.startsWith('seatsync://') || raw.startsWith('seatsync:')) {
     try {
-      // Replace protocol with https for standard URL parsing
-      const dummyUrl = new URL(trimmed.replace(/^seatsync:\/\//, 'https://seatsync.local/'));
-      const tokenParam = dummyUrl.searchParams.get('token');
-      if (tokenParam && tokenParam.trim()) {
-        return tokenParam.trim();
+      // Replace protocol to parse with standard URL class regardless of hostname vs pathname handling
+      const dummyUrlStr = raw.replace(/^seatsync:(\/\/)?/, 'https://seatsync.local/');
+      const url = new URL(dummyUrlStr);
+
+      const version = url.searchParams.get('v');
+      if (version && version !== '1') {
+        throw new Error('UNSUPPORTED_QR_VERSION');
       }
-    } catch {
-      // Manual regex fallback if URL parsing fails
-      const match = trimmed.match(/[?&]token=([^&]+)/);
+
+      const token = url.searchParams.get('token')?.trim();
+      if (token) {
+        extractedToken = decodeURIComponent(token);
+      }
+    } catch (err) {
+      if (err.message === 'UNSUPPORTED_QR_VERSION') throw err;
+      
+      // Fallback regex for URI query parameter token
+      const match = raw.match(/[?&]token=([^&]+)/);
       if (match && match[1]) {
-        return decodeURIComponent(match[1]).trim();
+        extractedToken = decodeURIComponent(match[1]).trim();
+      } else {
+        throw new Error('INVALID_QR_FORMAT');
       }
     }
-  }
-
-  // 2. Check JSON Format: {"v": 1, "type": "entry", "token": "..."} or legacy JSON
-  if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
+  } 
+  // 2. Check JSON payload format
+  else if (raw.startsWith('{') && raw.endsWith('}')) {
     try {
-      const parsed = JSON.parse(trimmed);
+      const parsed = JSON.parse(raw);
       if (parsed && typeof parsed === 'object') {
-        if (parsed.token && typeof parsed.token === 'string' && parsed.token.trim()) {
-          return parsed.token.trim();
-        }
-        if (parsed.qrToken && typeof parsed.qrToken === 'string' && parsed.qrToken.trim()) {
-          return parsed.qrToken.trim();
-        }
-        if (parsed.bookingId && typeof parsed.bookingId === 'string' && parsed.bookingId.trim()) {
-          return parsed.bookingId.trim();
-        }
-        if (parsed.booking_id && typeof parsed.booking_id === 'string' && parsed.booking_id.trim()) {
-          return parsed.booking_id.trim();
+        const token = (parsed.token || parsed.qrToken || parsed.qr_token || parsed.bookingId || parsed.id)?.trim();
+        if (token) {
+          extractedToken = token;
         }
       }
     } catch {
-      /* Fallback to plain string extraction if JSON parsing fails */
+      throw new Error('INVALID_QR_FORMAT');
     }
+  } 
+  // 3. Raw Token string format (e.g. "QR-5406EB70F2DDE2EA", UUID, or "BK-114312")
+  else if (!raw.includes('{') && !raw.includes('}') && !raw.includes('http://') && !raw.includes('https://')) {
+    extractedToken = raw;
   }
 
-  // 3. Fallback for plain token strings (e.g. "QR-5406EB70F2DDE2EA" or UUID or "BK-114312")
-  // Exclude raw long JSON strings that failed to parse properly
-  if (!trimmed.includes('{') && !trimmed.includes('}') && !trimmed.includes('http://') && !trimmed.includes('https://')) {
-    return trimmed;
+  if (!extractedToken) {
+    throw new Error('MISSING_QR_TOKEN');
   }
 
-  return null;
+  logMaskedTokenInDev(raw, extractedToken);
+  return extractedToken;
 }
