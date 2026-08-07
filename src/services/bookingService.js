@@ -157,6 +157,7 @@ export const bookingService = {
               seatId: b.seat_id,
               seatNumber: cleanSeatNumber,
               status: b.status,
+              qrToken: b.qr_token || b.qrToken,
               cancellationReason: b.cancellation_reason,
               cancellationSource: b.cancellation_source,
               cancelledAt: b.cancelled_at,

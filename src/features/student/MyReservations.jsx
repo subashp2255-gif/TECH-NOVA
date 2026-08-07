@@ -16,6 +16,7 @@ import { useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import { format, parse, isAfter, isBefore, addDays } from 'date-fns';
 import { QRCodeCanvas } from 'qrcode.react';
+import { buildEntryQrPayload } from '../../utils/qrPayload.js';
 
 function getBookingState(booking) {
   if (!booking) return null;
@@ -569,12 +570,7 @@ export default function MyReservations() {
               <div className="p-3 bg-white rounded-xl shadow-xs border border-slate-200">
                 <QRCodeCanvas
                   id={`qr-canvas-${qrModalTarget.id}`}
-                  value={JSON.stringify({
-                    bookingId: qrModalTarget.id,
-                    studentId: user?.id,
-                    seatNumber: qrModalTarget.seatNumber,
-                    date: qrModalTarget.bookingDate
-                  })}
+                  value={buildEntryQrPayload(qrModalTarget.qrToken || qrModalTarget.id)}
                   size={160}
                 />
               </div>

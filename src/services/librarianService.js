@@ -448,6 +448,107 @@ export const librarianService = {
     };
   },
 
+  // 4. SECURE ENTRY QR SCANNING ENGINE (RPC)
+  async scanEntryQr(scannedValue, libraryId = null) {
+    const { parseEntryQrPayload } = await import('../utils/qrPayload.js');
+    const token = parseEntryQrPayload(scannedValue);
+
+    if (!token) {
+      return {
+        valid: false,
+        statusCode: 'invalid_qr',
+        message: 'Invalid QR code format. Please scan a valid SeatSync Entry Pass.'
+      };
+    }
+
+    const scanNonce = isUUID(crypto?.randomUUID?.()) ? crypto.randomUUID() : null;
+
+    try {
+      const { data, error } = await supabase.rpc('scan_entry_qr', {
+        p_qr_token: token,
+        p_scan_nonce: scanNonce
+      });
+
+      if (error) {
+        console.warn('[librarianService] scan_entry_qr RPC error:', error.message);
+        throw new Error(error.message);
+      }
+
+      if (data) {
+        return {
+          valid: Boolean(data.valid),
+          alreadyCheckedIn: Boolean(data.already_checked_in),
+          statusCode: (data.status_code || 'UNKNOWN').toUpperCase(),
+          message: data.message || 'Scan completed.',
+          booking: data.valid ? {
+            id: data.booking_id,
+            bookingCode: data.booking_code,
+            studentId: data.student_id,
+            studentName: data.student_name,
+            studentRegistrationNumber: data.registration_number,
+            seatNumber: data.seat_number,
+            floorName: data.floor_name,
+            roomName: data.room_name,
+            libraryName: data.library_name,
+            slotName: data.slot_name,
+            slotTime: data.slot_time,
+            bookingDate: data.booking_date,
+            status: data.status,
+            checkedInAt: data.checked_in_at
+          } : null
+        };
+      }
+    } catch (err) {
+      console.warn('[librarianService] scanEntryQr notice:', err.message);
+    }
+
+    // Local fallback for testing / offline
+    const localBookings = (await db.read('seatsync_bookings')) || [];
+    const matched = localBookings.find(b =>
+      String(b.id) === token ||
+      (b.qrToken && b.qrToken === token) ||
+      (b.booking_code && b.booking_code.toUpperCase() === token.toUpperCase()) ||
+      (b.bookingCode && b.bookingCode.toUpperCase() === token.toUpperCase())
+    );
+
+    if (!matched) {
+      return {
+        valid: false,
+        statusCode: 'booking_not_found',
+        message: 'No booking matches this QR token. Please confirm booking reference or ask student to refresh pass.'
+      };
+    }
+
+    if (matched.status === 'cancelled' || matched.status === 'CANCELLED_BY_ADMIN') {
+      return {
+        valid: false,
+        statusCode: 'booking_cancelled',
+        message: 'This booking was cancelled.'
+      };
+    }
+
+    if (matched.status === 'checked_in') {
+      return {
+        valid: true,
+        alreadyCheckedIn: true,
+        statusCode: 'already_checked_in',
+        message: 'This student is already checked in.',
+        booking: matched
+      };
+    }
+
+    matched.status = 'checked_in';
+    matched.checkedInAt = new Date().toISOString();
+    await db.write('seatsync_bookings', localBookings);
+
+    return {
+      valid: true,
+      statusCode: 'success',
+      message: 'Check-in Successful',
+      booking: matched
+    };
+  },
+
   // 5. PROCESS ATOMIC CHECK-IN
   async processCheckIn(bookingId, staffUser, reason = 'Entry Verified') {
     if (isUUID(bookingId)) {

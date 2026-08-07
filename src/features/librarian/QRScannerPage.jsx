@@ -54,6 +54,7 @@ export default function QRScannerPage() {
   const videoRef = useRef(null);
   const mediaStreamRef = useRef(null);
   const cooldownRef = useRef(false);
+  const isProcessingRef = useRef(false);
   const lastScannedTokenRef = useRef('');
 
   // Recent Verifications Activity Feed
@@ -120,24 +121,27 @@ export default function QRScannerPage() {
 
     const scanFrame = async () => {
       if (isCameraActive && videoRef.current && videoRef.current.readyState === 4) {
-        if (barcodeDetector && !cooldownRef.current) {
+        if (barcodeDetector && !isProcessingRef.current) {
           try {
             const barcodes = await barcodeDetector.detect(videoRef.current);
             if (barcodes && barcodes.length > 0) {
               const rawVal = barcodes[0].rawValue;
               if (rawVal && rawVal !== lastScannedTokenRef.current) {
+                isProcessingRef.current = true;
+                lastScannedTokenRef.current = rawVal;
+                stopCameraStream();
                 handleVerifyToken(rawVal);
               }
             }
           } catch { /* proceed */ }
         }
       }
-      if (isCameraActive) {
+      if (isCameraActive && !isProcessingRef.current) {
         animationFrameId = requestAnimationFrame(scanFrame);
       }
     };
 
-    if (isCameraActive) {
+    if (isCameraActive && !isProcessingRef.current) {
       animationFrameId = requestAnimationFrame(scanFrame);
     }
 
@@ -232,11 +236,7 @@ export default function QRScannerPage() {
     const targetToken = (inputVal || tokenInput || '').trim();
     if (!targetToken) {
       toast.error('Please enter or scan a valid QR token, Register ID, or Booking Code.');
-      return;
-    }
-
-    // Cooldown check for camera duplicate scan prevention
-    if (cooldownRef.current && lastScannedTokenRef.current === targetToken) {
+      isProcessingRef.current = false;
       return;
     }
 
@@ -244,103 +244,56 @@ export default function QRScannerPage() {
     setScanningStatus('verifying');
     setScanResult(null);
 
-    const mode = modeOverride || activeMode;
     const nowTimeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
     try {
-      const res = await librarianService.verifyToken(targetToken, staffUser?.library_id, '2026-08-06');
-      const isCheckoutDetected = res.isCheckout || mode === 'checkout';
+      const res = await librarianService.scanEntryQr(targetToken, staffUser?.library_id);
 
-      if (res.statusCode === 'TOO_EARLY') {
-        const tooEarlyResult = {
-          valid: false,
-          isTooEarly: true,
-          message: res.message || 'Valid reservation — check-in not open yet. Check-in opens 15 minutes before the slot.',
-          booking: res.booking,
-          verifiedAt: nowTimeStr,
-          token: targetToken
-        };
-
-        setScanResult(tooEarlyResult);
-        setScanningStatus('idle');
-
-        const activityItem = {
-          id: `scan-${Date.now()}`,
-          timeStr: nowTimeStr,
-          reference: res.booking?.bookingCode || res.booking?.studentRegistrationNumber || targetToken,
-          studentName: res.booking?.studentName || 'Student',
-          action: 'Entry',
-          seatNumber: res.booking?.seatNumber || 'N/A',
-          result: 'Too Early',
-          statusClass: 'bg-amber-100 text-amber-800 border-amber-300'
-        };
-
-        setRecentVerifications(prev => [activityItem, ...prev.slice(0, 9)]);
-        toast.error(res.message || 'Check-in is not open yet.');
-        return;
-      }
-
-      const successResult = {
-        valid: true,
-        isReady: true,
-        isCheckout: isCheckoutDetected,
+      const structuredResult = {
+        valid: res.valid,
+        alreadyCheckedIn: res.alreadyCheckedIn,
+        statusCode: res.statusCode,
+        message: res.message,
         booking: res.booking,
         verifiedAt: nowTimeStr,
         token: targetToken
       };
 
-      setScanResult(successResult);
+      setScanResult(structuredResult);
       setScanningStatus('idle');
 
-      // Add to recent activity log (capped at 10 items) without reference truncation
       const activityItem = {
         id: `scan-${Date.now()}`,
         timeStr: nowTimeStr,
         reference: res.booking?.bookingCode || res.booking?.studentRegistrationNumber || targetToken,
         studentName: res.booking?.studentName || 'Student',
-        action: isCheckoutDetected ? 'Checkout' : 'Entry',
+        action: 'Entry Check-In',
         seatNumber: res.booking?.seatNumber || 'N/A',
-        result: 'Verified',
-        statusClass: 'bg-emerald-100 text-emerald-800 border-emerald-300'
+        result: res.valid ? 'Verified Check-In' : (res.statusCode || 'Failed'),
+        statusClass: res.valid
+          ? 'bg-emerald-100 text-emerald-800 border-emerald-300'
+          : ['TOO_EARLY', 'WRONG_DATE'].includes(res.statusCode)
+          ? 'bg-amber-100 text-amber-800 border-amber-300'
+          : 'bg-rose-100 text-rose-800 border-rose-300'
       };
 
       setRecentVerifications(prev => [activityItem, ...prev.slice(0, 9)]);
 
-      // Apply 2-second cooldown guard
-      cooldownRef.current = true;
-      lastScannedTokenRef.current = targetToken;
-      setTimeout(() => {
-        cooldownRef.current = false;
-      }, 2000);
-
-      toast.success(isCheckoutDetected ? 'Checkout QR verified!' : 'Pass Validated • Ready for Check-In!');
+      if (res.valid) {
+        toast.success(res.message || 'Check-in Successful');
+      } else {
+        toast.error(res.message || 'Verification Failed');
+      }
     } catch (err) {
-      const isTooEarly = err.message && err.message.includes('check-in not open yet');
-
-      const failedResult = {
+      console.warn('Verify token error:', err);
+      toast.error(err.message || 'Error processing scan request');
+      setScanResult({
         valid: false,
-        isTooEarly,
-        message: err.message || 'Booking record not found. Confirm the booking reference or ask the student to refresh their latest QR pass.',
-        token: targetToken,
+        statusCode: 'DATABASE_ERROR',
+        message: err.message || 'Failed to process scan request.',
         verifiedAt: nowTimeStr
-      };
-
-      setScanResult(failedResult);
+      });
       setScanningStatus('idle');
-
-      const failedActivityItem = {
-        id: `scan-${Date.now()}`,
-        timeStr: nowTimeStr,
-        reference: targetToken,
-        studentName: 'N/A',
-        action: mode === 'checkout' ? 'Checkout' : 'Entry',
-        seatNumber: '—',
-        result: isTooEarly ? 'Too Early' : 'Failed',
-        statusClass: isTooEarly ? 'bg-amber-100 text-amber-800 border-amber-300' : 'bg-rose-100 text-rose-800 border-rose-300'
-      };
-
-      setRecentVerifications(prev => [failedActivityItem, ...prev.slice(0, 9)]);
-      toast.error(err.message || 'Verification failed.');
     } finally {
       setLoading(false);
     }
@@ -380,9 +333,10 @@ export default function QRScannerPage() {
   const handleScanNextStudent = () => {
     setTokenInput('');
     setScanResult(null);
-    setScanningStatus(isCameraActive ? 'scanning' : 'idle');
+    setScanningStatus('idle');
     lastScannedTokenRef.current = '';
-    cooldownRef.current = false;
+    isProcessingRef.current = false;
+    startCameraStream();
   };
 
   const filteredVerifications = useMemo(() => {
