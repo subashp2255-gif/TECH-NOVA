@@ -158,6 +158,9 @@ export const bookingService = {
               seatNumber: cleanSeatNumber,
               status: b.status,
               cancellationReason: b.cancellation_reason,
+              cancellationSource: b.cancellation_source,
+              cancelledAt: b.cancelled_at,
+              cancelledBy: b.cancelled_by,
               createdAt: b.created_at
             };
           });

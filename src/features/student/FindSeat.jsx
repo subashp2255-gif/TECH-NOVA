@@ -1,20 +1,20 @@
-import React, { useEffect, useState, useMemo } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../../auth/AuthProvider';
-import { bookingService } from '../../services/bookingService';
-import { waitlistService } from '../../services/waitlistService';
-import { db } from '../../services/mockDatabase';
 import { useSync } from '../../hooks/useSync';
+import { bookingService } from '../../services/bookingService';
+import { slotService } from '../../services/slotService';
+import { occupancyService } from '../../services/occupancyService';
 import { Card, CardContent } from '../../components/shared/Card';
 import { Button } from '../../components/shared/Button';
 import { Badge } from '../../components/shared/Badge';
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '../../components/shared/Dialog';
-import { format } from 'date-fns';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '../../components/shared/Dialog';
 import { 
-  Calendar, Clock, CheckCircle2, AlertTriangle, AlertCircle, ArrowRight, ShieldCheck, MapPin, Search, Users, Sparkles, Filter, ChevronRight, Zap
+  Clock, Armchair, Shield, CheckCircle2, ChevronRight, AlertCircle, 
+  MapPin, Sparkles, Filter, Lock, Check, Zap, Users, ShieldAlert, Ban
 } from 'lucide-react';
+import { format, addDays } from 'date-fns';
 import toast from 'react-hot-toast';
-import WaitlistModal from '../../components/student/WaitlistModal';
-import SeatMapCard from '../../components/student/SeatMapCard';
 
 function format12HourTime(timeStr) {
   if (!timeStr) return '';
@@ -26,85 +26,77 @@ function format12HourTime(timeStr) {
 }
 
 export default function FindSeat() {
+  const navigate = useNavigate();
   const { user } = useAuth();
-  const [slots, setSlots] = useState([]);
+  
+  const tomorrowDate = useMemo(() => format(addDays(new Date(), 1), 'yyyy-MM-dd'), []);
+  
   const [floors, setFloors] = useState([]);
-  const [selectedSlot, setSelectedSlot] = useState(null);
   const [selectedFloor, setSelectedFloor] = useState(null);
-  const [selectedZone, setSelectedZone] = useState('ALL');
+  
+  const [slots, setSlots] = useState([]);
+  const [selectedSlot, setSelectedSlot] = useState(null);
+  
   const [seats, setSeats] = useState([]);
+  const [selectedZone, setSelectedZone] = useState('ALL');
   const [selectedSeat, setSelectedSeat] = useState(null);
+  
   const [loadingSlots, setLoadingSlots] = useState(true);
   const [loadingSeats, setLoadingSeats] = useState(false);
   const [bookingLoading, setBookingLoading] = useState(false);
   const [confirmModalOpen, setConfirmModalOpen] = useState(false);
 
-  const [waitlistSummaries, setWaitlistSummaries] = useState({});
-  const [waitlistModalOpen, setWaitlistModalOpen] = useState(false);
-  const [waitlistModalMode, setWaitlistModalMode] = useState('confirm');
-  const [targetWaitlistSlot, setTargetWaitlistSlot] = useState(null);
-  const [fillingDemo, setFillingDemo] = useState(false);
-
-  const tomorrowDate = bookingService.getTomorrowDateStr();
-
-  const fetchWaitlistSummaries = async (slotsList) => {
-    try {
-      const summaryPromises = slotsList.map(slot =>
-        waitlistService.getWaitlistSummaryForSlot(tomorrowDate, slot.id, user?.id)
-          .then(res => ({ slotId: slot.id, res }))
-          .catch(() => ({ slotId: slot.id, res: {} }))
-      );
-      const results = await Promise.all(summaryPromises);
-      const summaries = {};
-      results.forEach(({ slotId, res }) => { summaries[slotId] = res; });
-      setWaitlistSummaries(summaries);
-    } catch (err) {
-      console.warn('Failed to fetch waitlist summaries:', err);
-    }
-  };
-
   const fetchInitialData = async () => {
     try {
       setLoadingSlots(true);
-      const [slotsData, floorsData] = await Promise.all([
-        bookingService.getSlotsAvailability(tomorrowDate, user?.id),
-        bookingService.getFloors()
+      const [floorsData, studentSlots] = await Promise.all([
+        bookingService.getFloors(),
+        slotService.getStudentSlots({ bookingDate: tomorrowDate })
       ]);
-      setSlots(slotsData);
+      
       setFloors(floorsData || []);
-      if (floorsData && floorsData.length > 0) {
+      if (floorsData && floorsData.length > 0 && !selectedFloor) {
         setSelectedFloor(floorsData[0]);
       }
-      setLoadingSlots(false);
-      fetchWaitlistSummaries(slotsData);
-    } catch (error) {
-      toast.error('Failed to load available slots.');
+
+      if (studentSlots && studentSlots.length > 0) {
+        setSlots(studentSlots.map(s => ({
+          id: s.slot_id,
+          slot_occurrence_id: s.slot_occurrence_id,
+          name: s.slot_name,
+          label: s.slot_name,
+          startTime: s.start_time,
+          endTime: s.end_time,
+          effectiveStatus: s.effective_status,
+          isBookingEnabled: s.is_booking_enabled,
+          disabledReason: s.disabled_reason,
+          disabledByName: s.disabled_by_name,
+          hasStudentBooking: s.has_student_booking,
+          studentBookingStatus: s.student_booking_status,
+          availableCount: s.is_booking_enabled ? 40 : 0,
+          totalCount: 40
+        })));
+      } else {
+        // Fallback default slots availability
+        const availableSlots = await bookingService.getSlotsAvailability(tomorrowDate, user?.id);
+        setSlots(availableSlots.map(s => ({
+          ...s,
+          effectiveStatus: s.isDisabledByAdmin ? 'cancelled' : 'active',
+          isBookingEnabled: !s.isDisabledByAdmin
+        })));
+      }
+    } catch (err) {
+      toast.error('Failed to load slots availability: ' + err.message);
+    } finally {
       setLoadingSlots(false);
     }
   };
 
   useEffect(() => {
     fetchInitialData();
-  }, [user?.id]);
+  }, [tomorrowDate, user?.id]);
 
-  useSync((event) => {
-    if (event?.type === 'storage_change' || event?.type?.startsWith('WAITLIST_')) {
-      fetchInitialData();
-    }
-  });
-
-  const handleFillAfternoonSlot1Demo = async () => {
-    setFillingDemo(true);
-    try {
-      await waitlistService.fillAfternoonSlot1(tomorrowDate);
-      toast.success('Afternoon Slot 1 filled with 40 mock bookings!');
-      await fetchInitialData();
-    } catch (err) {
-      toast.error('Failed to fill Afternoon Slot 1.');
-    } finally {
-      setFillingDemo(false);
-    }
-  };
+  useSync(['slot_occurrences', 'slots', 'bookings', 'notifications'], fetchInitialData);
 
   const fetchSeats = async () => {
     if (!selectedSlot || !selectedFloor) return;
@@ -117,7 +109,7 @@ export default function FindSeat() {
         user?.id
       );
       setSeats(seatsData);
-    } catch (error) {
+    } catch {
       toast.error('Failed to load seats map.');
     } finally {
       setLoadingSeats(false);
@@ -133,6 +125,12 @@ export default function FindSeat() {
   const handleConfirmSeatBooking = async (targetSeat) => {
     const seatToBook = targetSeat || selectedSeat;
     if (!selectedSlot || !selectedFloor || !seatToBook || !user) return;
+
+    if (selectedSlot.effectiveStatus === 'cancelled' || selectedSlot.effectiveStatus === 'globally_disabled' || selectedSlot.isBookingEnabled === false) {
+      toast.error('This slot occurrence has been cancelled by the administrator.');
+      return;
+    }
+
     setBookingLoading(true);
     try {
       await bookingService.createBooking(
@@ -148,8 +146,8 @@ export default function FindSeat() {
       setSelectedSlot(null);
       fetchInitialData();
     } catch (error) {
-      if (error.message?.includes('already') || error.message?.includes('booked') || error.message?.includes('taken') || error.message?.includes('occupied')) {
-        toast.error('This seat was just booked by another student. Please select another available seat.');
+      if (error.message?.includes('reserved by another student') || error.message?.includes('already') || error.message?.includes('booked')) {
+        toast.error('This seat was just reserved by another student. Please select another available seat.');
         setSelectedSeat(null);
         fetchSeats();
       } else {
@@ -160,94 +158,18 @@ export default function FindSeat() {
     }
   };
 
-  const handleConfirmBooking = () => handleConfirmSeatBooking(selectedSeat);
-
   const filteredSeats = useMemo(() => {
     if (selectedZone === 'ALL') return seats;
     return seats.filter(s => s.zoneId === selectedZone);
   }, [seats, selectedZone]);
 
-  const getSlotStatusInfo = (slot) => {
-    const slotStatus = String(slot.occurrenceStatus ?? slot.status ?? (slot.isDisabledByAdmin ? "DISABLED" : "ACTIVE")).toUpperCase();
-    const isSlotCancelled = slotStatus === "DISABLED" || slotStatus === "CANCELLED" || slot.isDisabledByAdmin === true || slot.isDisabled === true;
-
-    if (isSlotCancelled) {
-      return {
-        label: 'Cancelled by Library',
-        badgeClass: 'bg-red-100 text-red-800 border-red-300 font-bold',
-        progressClass: 'bg-slate-300',
-        percent: 0,
-        isSlotCancelled: true,
-        isDisabled: true,
-        isFullyBooked: false
-      };
-    }
-
-    const available = Number(slot.availableCount || 0);
-    const total = Number(slot.totalCount || 40);
-    const pct = Math.round((available / total) * 100);
-
-    if (available === 0) {
-      return {
-        label: 'Fully Booked',
-        badgeClass: 'bg-red-100 text-red-800 border-red-300 font-bold',
-        progressClass: 'bg-red-500',
-        percent: 0,
-        isSlotCancelled: false,
-        isDisabled: false,
-        isFullyBooked: true
-      };
-    }
-
-    if (pct <= 25) {
-      return {
-        label: `${available} Seats Left`,
-        badgeClass: 'bg-amber-100 text-amber-800 border-amber-300 font-bold',
-        progressClass: 'bg-amber-500',
-        percent: pct,
-        isSlotCancelled: false,
-        isDisabled: false,
-        isFullyBooked: false
-      };
-    }
-
-    return {
-      label: `${available} Available`,
-      badgeClass: 'bg-emerald-100 text-emerald-800 border-emerald-300 font-bold',
-      progressClass: 'bg-emerald-500',
-      percent: pct,
-      isSlotCancelled: false,
-      isDisabled: false,
-      isFullyBooked: false
-    };
-  };
-
-  const handleViewWaitingList = (event, slot) => {
-    if (event) {
-      event.preventDefault();
-      event.stopPropagation();
-    }
-    setTargetWaitlistSlot(slot);
-    setWaitlistModalMode('details');
-    setWaitlistModalOpen(true);
-  };
-
-  const handleJoinWaitingList = (event, slot) => {
-    if (event) {
-      event.preventDefault();
-      event.stopPropagation();
-    }
-    setTargetWaitlistSlot(slot);
-    setWaitlistModalMode('confirm');
-    setWaitlistModalOpen(true);
-  };
-
   return (
-    <div className="space-y-6 max-w-7xl mx-auto animate-in fade-in duration-300 pb-12">
-      <div className="space-y-2 pb-2 border-b border-slate-200/80">
-        <h1 className="text-2xl sm:text-3xl font-black text-navy tracking-tight">Book a Library Seat</h1>
-        <p className="text-xs sm:text-sm text-slate-500 font-medium">
-          Select a time slot for tomorrow ({format(new Date(tomorrowDate), 'EEEE, d MMMM yyyy')}) and pick your seat.
+    <div className="space-y-6 max-w-7xl mx-auto animate-in fade-in duration-300 pb-16">
+      {/* Header */}
+      <div className="pb-2 border-b border-slate-200">
+        <h1 className="text-2xl sm:text-3xl font-black text-navy tracking-tight">Reserve a Seat</h1>
+        <p className="text-xs sm:text-sm text-slate-500 font-medium mt-1">
+          Select a time slot for tomorrow (<span className="font-mono font-bold text-navy">{format(new Date(tomorrowDate), 'EEEE, d MMMM yyyy')}</span>) and pick your seat.
         </p>
       </div>
 
@@ -258,17 +180,7 @@ export default function FindSeat() {
             <h2 className="text-lg font-bold text-navy flex items-center gap-2">
               <Clock size={20} className="text-brandBlue" /> Step 1: Select Time Slot
             </h2>
-
-            <div className="flex items-center gap-3">
-              <Button
-                onClick={handleFillAfternoonSlot1Demo}
-                disabled={fillingDemo}
-                className="bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold h-8 px-3 rounded-xl shadow-xs flex items-center gap-1.5"
-              >
-                <Zap size={13} /> {fillingDemo ? 'Filling Slot...' : 'Fill Afternoon Slot 1 (40 Seats Demo)'}
-              </Button>
-              <Badge variant="outline" className="text-xs font-semibold">Tomorrow's Slots</Badge>
-            </div>
+            <Badge variant="outline" className="text-xs font-semibold">Tomorrow's Slots</Badge>
           </div>
 
           {loadingSlots ? (
@@ -285,124 +197,93 @@ export default function FindSeat() {
           ) : (
             <div className="grid gap-3" style={{ gridTemplateColumns: 'repeat(auto-fill,minmax(min(100%,260px),1fr))' }}>
               {slots.map((slot, index) => {
-                const slotStatus = String(slot.occurrenceStatus ?? slot.status ?? (slot.isDisabledByAdmin ? "DISABLED" : "ACTIVE")).toUpperCase();
-                const isSlotCancelled = slotStatus === "DISABLED" || slotStatus === "CANCELLED" || slot.isDisabledByAdmin === true || slot.isDisabled === true;
-                const status = getSlotStatusInfo(slot);
-                const isFullyBooked = !isSlotCancelled && Number(slot.availableCount) === 0;
-                const summary = waitlistSummaries[slot.id] || {};
-                const isStudentWaiting = !isSlotCancelled && summary.isStudentWaiting;
+                const isCancelled = slot.effectiveStatus === 'cancelled' || slot.effectiveStatus === 'globally_disabled' || slot.effectiveStatus === 'disabled' || slot.isBookingEnabled === false;
+                const isAlreadyBooked = Boolean(slot.hasStudentBooking && slot.studentBookingStatus && slot.studentBookingStatus !== 'cancelled');
                 const isMorning = index < 4;
-
-                const isAlreadyBooked = slot.isBookedByStudent;
 
                 return (
                   <Card
                     key={slot.id}
                     onClick={() => {
-                      if (isSlotCancelled) return;
+                      if (isCancelled) {
+                        toast.error(`This slot was cancelled by administrator. Reason: ${slot.disabledReason || 'Library maintenance'}`);
+                        return;
+                      }
                       if (isAlreadyBooked) {
                         toast.error('You already have an active reservation for this time slot.');
                         return;
                       }
-                      if (isFullyBooked) {
-                        if (isStudentWaiting) handleViewWaitingList(null, slot);
-                        else handleJoinWaitingList(null, slot);
-                      } else {
-                        setSelectedSlot(slot);
-                      }
+                      setSelectedSlot(slot);
                     }}
-                    className={`transition-all border-2 rounded-xl p-3.5 ${
-                      isSlotCancelled
-                        ? 'border-red-200 bg-red-50/20 cursor-not-allowed opacity-90'
+                    className={`transition-all border-2 rounded-2xl p-4 relative overflow-hidden ${
+                      isCancelled
+                        ? 'border-red-500 bg-red-50/60 cursor-not-allowed shadow-xs'
                         : isAlreadyBooked
                         ? 'border-emerald-500 bg-emerald-50/30 cursor-pointer shadow-xs'
-                        : isFullyBooked
-                        ? isStudentWaiting ? 'border-amber-400 bg-amber-50/20 cursor-pointer' : 'border-red-200 bg-slate-50/40 cursor-pointer'
                         : 'border-slate-200 hover:border-brandBlue/50 hover:shadow-md bg-white cursor-pointer'
                     }`}
                   >
                     <CardContent className="p-0 space-y-3">
                       <div className="flex justify-between items-start gap-1.5">
-                        <Badge variant="outline" className="text-[10px] font-bold uppercase bg-slate-50">
+                        <Badge variant="outline" className="text-[10px] font-bold uppercase bg-white">
                           {isMorning ? 'Morning' : 'Afternoon'}
                         </Badge>
-                        {isAlreadyBooked ? (
+                        
+                        {isCancelled ? (
+                          <Badge className="bg-red-600 text-white font-bold text-[10px] uppercase shadow-xs">
+                            CANCELLED BY ADMIN
+                          </Badge>
+                        ) : isAlreadyBooked ? (
                           <Badge className="bg-emerald-600 text-white font-bold text-[10px]">
                             Your Booking
                           </Badge>
                         ) : (
-                          <Badge variant="outline" className={`text-[10px] ${status.badgeClass}`}>
-                            {isSlotCancelled ? 'Cancelled by Library' : status.label}
+                          <Badge className="bg-emerald-100 text-emerald-800 border-emerald-300 font-bold text-[10px]">
+                            Available
                           </Badge>
                         )}
                       </div>
 
                       <div>
-                        <h3 className="text-sm font-bold text-navy">{slot.label}</h3>
+                        <h3 className="text-sm font-black text-navy">{slot.label || slot.name}</h3>
                         <p className="text-[10px] text-slate-500 font-mono font-semibold">
                           {format12HourTime(slot.startTime)} – {format12HourTime(slot.endTime)}
                         </p>
                       </div>
 
-                      {isSlotCancelled ? (
-                        <div className="p-2 bg-red-100/60 border border-red-200 rounded-lg text-[10px] font-bold text-red-900 space-y-0.5">
-                          <p className="flex items-center gap-1 text-red-700">
-                            <AlertCircle size={12} className="shrink-0" /> This slot has been cancelled by the library.
+                      {/* Cancelled Banner */}
+                      {isCancelled ? (
+                        <div className="p-2.5 bg-white border border-red-300 rounded-xl text-[10.5px] space-y-1 shadow-xs">
+                          <div className="font-bold text-red-700 flex items-center gap-1">
+                            <ShieldAlert size={13} className="text-red-600" />
+                            <span>Slot Cancelled by Administrator</span>
+                          </div>
+                          <p className="text-[10px] text-slate-600 font-medium">
+                            <strong>Reason:</strong> {slot.disabledReason || 'Library closed for maintenance'}
                           </p>
-                          {slot.disabledReason && (
-                            <p className="text-[9.5px] font-medium text-slate-600">Reason: {slot.disabledReason}</p>
+                          {slot.hasStudentBooking && (
+                            <p className="text-[10px] text-red-600 font-bold border-t border-red-100 pt-1 mt-1">
+                              Your reservation for this slot was cancelled by Admin.
+                            </p>
                           )}
                         </div>
                       ) : isAlreadyBooked ? (
-                        <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-2 flex items-center justify-between text-[10px]">
+                        <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-2 flex items-center justify-between text-[10px]">
                           <span className="font-bold text-emerald-900 flex items-center gap-1">
                             <CheckCircle2 size={12} className="text-emerald-600" /> Reserved by You
                           </span>
                         </div>
-                      ) : isStudentWaiting ? (
-                        <div className="bg-amber-50 border border-amber-200 rounded-lg p-2 flex items-center justify-between text-[10px]">
-                          <span className="font-bold text-amber-950 flex items-center gap-1">
-                            <Clock size={11} className="text-amber-600" /> Waitlisted
-                          </span>
-                          <Badge className="bg-amber-500 text-white font-mono font-bold text-[10px] px-1.5 py-0.5">
-                            #{summary.studentPosition}
-                          </Badge>
-                        </div>
                       ) : (
                         <div className="space-y-1">
                           <div className="flex justify-between text-[10px] font-bold">
-                            <span className="text-slate-700">{slot.availableCount}/{slot.totalCount} seats</span>
-                            <span className="text-slate-500 font-mono">{status.percent}%</span>
+                            <span className="text-slate-700">Operational Capacity</span>
+                            <span className="text-emerald-600 font-mono font-black">Open for Booking</span>
                           </div>
                           <div className="w-full bg-slate-100 rounded-full h-1.5 overflow-hidden">
-                            <div className={`h-full rounded-full ${status.progressClass}`} style={{ width: `${status.percent}%` }} />
+                            <div className="h-full rounded-full bg-emerald-500 w-full" />
                           </div>
                         </div>
                       )}
-
-                      <Button
-                        type="button"
-                        disabled={isSlotCancelled || isAlreadyBooked}
-                        aria-disabled={isSlotCancelled || isAlreadyBooked}
-                        variant={isSlotCancelled ? "outline" : isAlreadyBooked ? "secondary" : isFullyBooked ? (isStudentWaiting ? "secondary" : "outline") : "default"}
-                        className={`w-full h-9 text-xs font-bold rounded-lg ${
-                          isSlotCancelled
-                            ? 'bg-slate-100 text-slate-400 border-slate-200 cursor-not-allowed'
-                            : isAlreadyBooked
-                            ? 'bg-emerald-100 text-emerald-900 border-emerald-300 cursor-not-allowed'
-                            : isFullyBooked
-                            ? isStudentWaiting ? 'bg-amber-100 text-amber-900 border-amber-300' : 'border-red-300 text-red-700 hover:bg-red-50'
-                            : 'bg-brandBlue text-white'
-                        }`}
-                      >
-                        {isSlotCancelled
-                          ? 'Slot Cancelled'
-                          : isAlreadyBooked
-                          ? 'Already Reserved'
-                          : isFullyBooked
-                          ? isStudentWaiting ? 'View Waiting Status' : 'Join Waiting List'
-                          : 'Select Seat'}
-                      </Button>
                     </CardContent>
                   </Card>
                 );
@@ -411,77 +292,201 @@ export default function FindSeat() {
           )}
         </div>
       ) : (
-        /* 2. ENHANCED INTERACTIVE SEAT MAP SELECTION */
-        <div className="space-y-6">
-          <div className="flex items-center justify-between">
+        /* 2. SEAT SELECTION GRID */
+        <div className="space-y-4">
+          <div className="flex flex-wrap items-center justify-between gap-3 bg-white p-4 border border-slate-200 rounded-2xl shadow-xs">
+            <div>
+              <div className="flex items-center gap-2">
+                <Badge className="bg-brandBlue text-white font-bold text-xs">{selectedSlot.label || selectedSlot.name}</Badge>
+                <span className="text-xs text-slate-500 font-mono font-bold">
+                  {format12HourTime(selectedSlot.startTime)} – {format12HourTime(selectedSlot.endTime)}
+                </span>
+              </div>
+              <p className="text-xs text-slate-500 mt-1">
+                Selected Floor: <strong className="text-navy">{selectedFloor?.name}</strong>
+              </p>
+            </div>
+
             <Button
-              type="button"
-              variant="outline"
-              size="sm"
               onClick={() => { setSelectedSlot(null); setSelectedSeat(null); }}
-              className="text-xs font-bold rounded-2xl h-9 border-slate-300 hover:bg-slate-100 flex items-center gap-1.5"
+              variant="outline"
+              className="text-xs font-bold rounded-xl h-9"
             >
               ← Change Time Slot
             </Button>
           </div>
 
-          <SeatMapCard
-            floor={selectedFloor}
-            slot={selectedSlot}
-            dateStr={tomorrowDate}
-            seats={seats}
-            loadingSeats={loadingSeats}
-            selectedSeat={selectedSeat}
-            onSelectSeat={setSelectedSeat}
-            onConfirmBooking={handleConfirmSeatBooking}
-            bookingLoading={bookingLoading}
-            onRefresh={fetchSeats}
-            isSlotCancelled={getSlotStatusInfo(selectedSlot).isSlotCancelled}
-            user={user}
-          />
+          {/* Seat Map Controls */}
+          <div className="grid lg:grid-cols-4 gap-6">
+            <div className="lg:col-span-3 space-y-4">
+              {/* Filter Zones */}
+              <div className="flex items-center gap-2 overflow-x-auto pb-1">
+                <span className="text-xs font-bold text-slate-600 flex items-center gap-1 shrink-0">
+                  <Filter size={13} /> Zone:
+                </span>
+                <button
+                  onClick={() => setSelectedZone('ALL')}
+                  className={`px-3 py-1 rounded-xl text-xs font-bold transition-colors ${selectedZone === 'ALL' ? 'bg-navy text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}
+                >
+                  All Seats (40)
+                </button>
+                <button
+                  onClick={() => setSelectedZone('zone-a')}
+                  className={`px-3 py-1 rounded-xl text-xs font-bold transition-colors ${selectedZone === 'zone-a' ? 'bg-navy text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}
+                >
+                  Zone A — Quiet Study (S-01 to S-20)
+                </button>
+                <button
+                  onClick={() => setSelectedZone('zone-b')}
+                  className={`px-3 py-1 rounded-xl text-xs font-bold transition-colors ${selectedZone === 'zone-b' ? 'bg-navy text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}
+                >
+                  Zone B — Collaborative (S-21 to S-40)
+                </button>
+              </div>
+
+              {/* Grid Layout */}
+              <Card className="border border-slate-200 bg-white rounded-2xl p-6 shadow-xs">
+                {loadingSeats ? (
+                  <div className="py-12 text-center text-xs font-mono text-slate-400 animate-pulse">Loading seat map layout...</div>
+                ) : (
+                  <div className="grid grid-cols-5 sm:grid-cols-8 md:grid-cols-10 gap-2.5">
+                    {filteredSeats.map(seat => {
+                      const isSelected = selectedSeat?.id === seat.id;
+                      const isAvailable = seat.status_state === 'available';
+                      const isUserBooked = seat.status_state === 'user_booked';
+
+                      return (
+                        <button
+                          key={seat.id}
+                          disabled={!isAvailable}
+                          onClick={() => setSelectedSeat(seat)}
+                          className={`
+                            h-12 rounded-xl flex flex-col items-center justify-center font-mono transition-all relative border
+                            ${isSelected
+                              ? 'bg-brandBlue text-white border-brandBlue ring-4 ring-brandBlue/20 scale-105 shadow-md z-10'
+                              : isUserBooked
+                              ? 'bg-emerald-600 text-white border-emerald-600 cursor-not-allowed font-bold'
+                              : seat.status_state === 'occupied'
+                              ? 'bg-rose-100 text-rose-800 border-rose-200 cursor-not-allowed opacity-80'
+                              : seat.status_state === 'reserved'
+                              ? 'bg-amber-100 text-amber-800 border-amber-200 cursor-not-allowed opacity-80'
+                              : seat.status_state === 'maintenance'
+                              ? 'bg-slate-200 text-slate-500 border-slate-300 cursor-not-allowed'
+                              : 'bg-emerald-50 text-emerald-900 border-emerald-200 hover:border-brandBlue hover:bg-brandBlue/10 hover:scale-105 cursor-pointer font-bold'}
+                          `}
+                        >
+                          <span className="text-xs font-bold">{seat.seatNumber}</span>
+                          {seat.powerOutlet && <span className="text-[8px] opacity-75">⚡</span>}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+              </Card>
+            </div>
+
+            {/* Selected Seat Details Sidebar */}
+            <div className="space-y-4">
+              <Card className="border border-slate-200 bg-white rounded-2xl p-5 shadow-xs space-y-4">
+                <h3 className="text-sm font-bold text-navy flex items-center gap-2">
+                  <Armchair size={18} className="text-brandBlue" /> Selected Seat Details
+                </h3>
+
+                {selectedSeat ? (
+                  <div className="space-y-3">
+                    <div className="p-4 bg-blue-50/50 border border-blue-200/80 rounded-xl space-y-1">
+                      <div className="flex items-center justify-between">
+                        <span className="text-xl font-black text-navy font-mono">{selectedSeat.seatNumber}</span>
+                        <Badge className="bg-emerald-600 text-white text-[10px]">Available</Badge>
+                      </div>
+                      <p className="text-xs font-semibold text-slate-700">{selectedSeat.type}</p>
+                    </div>
+
+                    <div className="space-y-2 text-xs text-slate-600">
+                      <div className="flex justify-between py-1 border-b border-slate-100">
+                        <span>Power Socket:</span>
+                        <span className="font-bold text-navy">{selectedSeat.powerOutlet ? 'Available (⚡)' : 'No'}</span>
+                      </div>
+                      <div className="flex justify-between py-1 border-b border-slate-100">
+                        <span>Window View:</span>
+                        <span className="font-bold text-navy">{selectedSeat.nearWindow ? 'Yes' : 'No'}</span>
+                      </div>
+                      <div className="flex justify-between py-1 border-b border-slate-100">
+                        <span>Accessible:</span>
+                        <span className="font-bold text-navy">{selectedSeat.isAccessible ? 'Yes (♿)' : 'Standard'}</span>
+                      </div>
+                    </div>
+
+                    <Button
+                      onClick={() => setConfirmModalOpen(true)}
+                      className="w-full bg-brandBlue hover:bg-blue-700 text-white font-bold text-xs h-11 rounded-xl shadow-md flex items-center justify-center gap-2"
+                    >
+                      <span>Proceed to Confirm</span> <ChevronRight size={16} />
+                    </Button>
+                  </div>
+                ) : (
+                  <div className="py-8 text-center text-xs text-slate-400 space-y-2">
+                    <Armchair size={32} className="mx-auto text-slate-300" />
+                    <p>Click on any available green seat grid item to select.</p>
+                  </div>
+                )}
+              </Card>
+            </div>
+          </div>
         </div>
       )}
 
-      {/* CONFIRMATION DIALOG */}
-      <Dialog open={confirmModalOpen} onOpenChange={setConfirmModalOpen}>
-        <DialogContent className="sm:max-w-md rounded-2xl p-6">
-          <DialogHeader>
-            <DialogTitle className="text-lg font-bold text-navy">Confirm Seat Reservation</DialogTitle>
-            <DialogDescription className="text-xs text-slate-500 pt-1">
-              Review your reservation details for tomorrow.
-            </DialogDescription>
-          </DialogHeader>
+      {/* Booking Confirmation Dialog */}
+      {selectedSeat && selectedSlot && (
+        <Dialog open={confirmModalOpen} onOpenChange={setConfirmModalOpen}>
+          <DialogContent className="max-w-md bg-white rounded-3xl p-6 space-y-4 border border-slate-200 shadow-2xl">
+            <DialogHeader className="text-left space-y-1">
+              <DialogTitle className="text-lg font-black text-navy flex items-center gap-2">
+                <Sparkles size={20} className="text-brandBlue" /> Confirm Seat Reservation
+              </DialogTitle>
+              <DialogDescription className="text-xs text-slate-500">
+                Please review your library booking details before confirming.
+              </DialogDescription>
+            </DialogHeader>
 
-          <div className="space-y-3 py-3">
-            <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 text-xs space-y-1">
-              <div className="flex justify-between"><span className="text-slate-500">Student:</span> <strong className="text-navy">{user?.name} ({user?.collegeId})</strong></div>
-              <div className="flex justify-between"><span className="text-slate-500">Date:</span> <strong className="text-navy">{tomorrowDate}</strong></div>
-              <div className="flex justify-between"><span className="text-slate-500">Slot:</span> <strong className="text-brandBlue font-mono">{selectedSlot?.label} ({selectedSlot?.startTime} – {selectedSlot?.endTime})</strong></div>
-              <div className="flex justify-between"><span className="text-slate-500">Seat:</span> <strong className="text-navy">{selectedSeat?.seatNumber}</strong></div>
+            <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200 space-y-2.5 text-xs">
+              <div className="flex justify-between py-1 border-b border-slate-200/60">
+                <span className="text-slate-500 font-medium">Student Name:</span>
+                <span className="font-bold text-navy">{user?.name || user?.fullName}</span>
+              </div>
+              <div className="flex justify-between py-1 border-b border-slate-200/60">
+                <span className="text-slate-500 font-medium">Registration No:</span>
+                <span className="font-mono font-bold text-indigo-600">{user?.collegeId || user?.registration_number}</span>
+              </div>
+              <div className="flex justify-between py-1 border-b border-slate-200/60">
+                <span className="text-slate-500 font-medium">Booking Date:</span>
+                <span className="font-mono font-bold text-navy">{tomorrowDate}</span>
+              </div>
+              <div className="flex justify-between py-1 border-b border-slate-200/60">
+                <span className="text-slate-500 font-medium">Time Slot:</span>
+                <span className="font-bold text-navy">{selectedSlot.label || selectedSlot.name} ({format12HourTime(selectedSlot.startTime)} - {format12HourTime(selectedSlot.endTime)})</span>
+              </div>
+              <div className="flex justify-between py-1">
+                <span className="text-slate-500 font-medium">Selected Seat:</span>
+                <Badge className="bg-brandBlue text-white font-mono font-bold text-xs">{selectedSeat.seatNumber}</Badge>
+              </div>
             </div>
-          </div>
 
-          <div className="flex justify-end gap-3 pt-2">
-            <Button variant="outline" onClick={() => setConfirmModalOpen(false)} disabled={bookingLoading} className="rounded-xl text-xs">
-              Cancel
-            </Button>
-            <Button onClick={handleConfirmBooking} disabled={bookingLoading} className="bg-brandBlue hover:bg-blue-700 text-white font-bold rounded-xl text-xs">
-              {bookingLoading ? 'Processing...' : 'Confirm Booking'}
-            </Button>
-          </div>
-        </DialogContent>
-      </Dialog>
-
-      <WaitlistModal
-        isOpen={waitlistModalOpen}
-        onClose={() => setWaitlistModalOpen(false)}
-        mode={waitlistModalMode}
-        slot={targetWaitlistSlot}
-        dateStr={tomorrowDate}
-        user={user}
-        summary={targetWaitlistSlot ? waitlistSummaries[targetWaitlistSlot.id] : null}
-        onSuccess={fetchInitialData}
-      />
+            <DialogFooter className="flex items-center justify-end gap-3 pt-2">
+              <Button variant="outline" onClick={() => setConfirmModalOpen(false)} className="rounded-xl text-xs font-bold h-10">
+                Cancel
+              </Button>
+              <Button
+                onClick={() => handleConfirmSeatBooking(selectedSeat)}
+                disabled={bookingLoading}
+                className="bg-brandBlue hover:bg-blue-700 text-white font-bold text-xs h-10 px-5 rounded-xl shadow-md"
+              >
+                {bookingLoading ? 'Reserving Seat...' : 'Confirm Reservation →'}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      )}
     </div>
   );
 }

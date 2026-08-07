@@ -1,39 +1,69 @@
-import { db } from './mockDatabase.js';
+import { supabase, isUUID } from '../lib/supabase.js';
 import { bookingService } from './bookingService.js';
+import { db } from './mockDatabase.js';
 
 export const dashboardService = {
   async getStudentStats(studentId) {
-    const bookings = (await db.read('seatsync_bookings')) || [];
-    const tomorrowDate = bookingService.getTomorrowDateStr();
+    try {
+      const myBookings = await bookingService.getMyBookings(studentId);
+      const tomorrowDate = bookingService.getTomorrowDateStr();
 
-    const myBookings = bookings.filter(b => b.studentId === studentId);
-    const tomorrowsBookings = myBookings.filter(b => b.bookingDate === tomorrowDate && b.status !== 'cancelled').length;
-    const completedReservations = myBookings.filter(b => b.status === 'completed' || b.status === 'checked_out').length;
-    const activeBooking = myBookings.find(b => b.status === 'active' || b.status === 'confirmed' || b.status === 'checkout_pending');
-    const upcomingBooking = myBookings.find(b => b.bookingDate === tomorrowDate && b.status === 'confirmed');
+      const activeOrConfirmed = (myBookings || []).filter(b => 
+        !['cancelled', 'cancelled_by_student', 'cancelled_by_admin', 'slot_cancelled'].includes(String(b.status || '').toLowerCase())
+      );
 
-    const totalStudyHours = completedReservations * 1; // 1 hour per slot
+      const tomorrowsBookings = activeOrConfirmed.filter(b => b.bookingDate === tomorrowDate).length;
+      const completedReservations = (myBookings || []).filter(b => 
+        ['completed', 'checked_out'].includes(String(b.status || '').toLowerCase())
+      ).length;
 
-    return {
-      tomorrowsBookings,
-      completedReservations,
-      activeBooking,
-      upcomingBooking,
-      totalStudyHours
-    };
+      const activeBooking = activeOrConfirmed.find(b => 
+        ['active', 'checked_in', 'checkout_pending'].includes(String(b.status || '').toLowerCase())
+      );
+
+      const upcomingBooking = activeOrConfirmed.find(b => 
+        b.bookingDate === tomorrowDate && ['confirmed', 'awaiting_check_in'].includes(String(b.status || '').toLowerCase())
+      );
+
+      const totalStudyHours = completedReservations * 1;
+
+      return {
+        tomorrowsBookings,
+        completedReservations,
+        activeBooking: activeBooking || null,
+        upcomingBooking: upcomingBooking || null,
+        totalStudyHours
+      };
+    } catch (err) {
+      console.warn('[dashboardService] getStudentStats notice:', err.message);
+      return {
+        tomorrowsBookings: 0,
+        completedReservations: 0,
+        activeBooking: null,
+        upcomingBooking: null,
+        totalStudyHours: 0
+      };
+    }
   },
 
   async getLibraryInfo() {
-    const settings = (await db.read('seatsync_settings')) || {};
-    const seats = (await db.read('seatsync_seats')) || [];
+    try {
+      const { data: settings } = await supabase.from('library_settings').select('*').maybeSingle();
+      const { count } = await supabase.from('seats').select('*', { count: 'exact', head: true });
 
-    const activeSeats = seats.filter(s => s.status === 'active').length || 40;
-
-    return {
-      libraryName: settings.libraryName || 'SeatSync Central University Library',
-      operatingHours: settings.operatingHours || '08:00 AM – 10:00 PM',
-      totalSeats: activeSeats,
-      notice: settings.notice || 'Quiet Study Hours are in effect in Zone A from 6:00 PM onwards.'
-    };
+      return {
+        libraryName: settings?.library_name || 'SeatSync Central Library',
+        operatingHours: settings?.operating_hours || '08:00 AM – 10:00 PM',
+        totalSeats: count || 40,
+        notice: settings?.notice || 'Quiet Study Hours are in effect in Zone A from 6:00 PM onwards.'
+      };
+    } catch {
+      return {
+        libraryName: 'SeatSync Central Library',
+        operatingHours: '08:00 AM – 10:00 PM',
+        totalSeats: 40,
+        notice: 'Quiet Study Hours are in effect in Zone A from 6:00 PM onwards.'
+      };
+    }
   }
 };

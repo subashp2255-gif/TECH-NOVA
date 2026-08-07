@@ -41,6 +41,18 @@ export const defaultUsers = [
     adminId: 'ADM001',
     department: 'IT & Systems Administration',
     createdAt: new Date().toISOString()
+  },
+  {
+    id: 'USR-004',
+    identifier: 'BIT1000',
+    name: 'System Administrator',
+    email: 'admin@bitsathy.ac.in',
+    password: '123456',
+    role: 'ADMIN',
+    status: 'ACTIVE',
+    adminId: 'BIT1000',
+    department: 'IT & Systems Administration',
+    createdAt: new Date().toISOString()
   }
 ];
 

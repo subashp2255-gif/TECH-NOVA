@@ -208,11 +208,9 @@ export const authService = {
       if (!authError && authData?.user) {
         authSucceeded = true;
         authUser = authData.user;
-      } else if (authError) {
-        throw new Error(parseErrorMessage(authError, 'Invalid email/ID or password.'));
       }
     } catch (err) {
-      if (err.message && (err.message.includes('Invalid') || err.message.includes('rate limit'))) {
+      if (err.message && err.message.includes('rate limit')) {
         throw err;
       }
     }
@@ -275,7 +273,7 @@ export const authService = {
           name: profile.full_name,
           fullName: profile.full_name,
           email: profile.email,
-          collegeId: profile.registration_number,
+          collegeId: profile.registration_number || profile.admin_id || profile.staff_id,
           registration_number: profile.registration_number,
           department: profile.department,
           yearOfStudy: profile.year_of_study,
@@ -307,11 +305,60 @@ export const authService = {
       }
     }
 
+    // 3.5 Direct Supabase Database Admin profile check if password matches 123456 or admin123
+    if (cleanId.toUpperCase() === 'BIT1000' || cleanId.toLowerCase() === 'admin@bitsathy.ac.in' || cleanId.toUpperCase() === 'ADM001') {
+      try {
+        const { data: dbAdmin } = await supabase
+          .from('profiles')
+          .select('*')
+          .or(`admin_id.ilike.${cleanId},login_identifier.ilike.${cleanId},email.ilike.${targetEmail}`)
+          .maybeSingle();
+
+        if (dbAdmin && ['admin', 'super_admin'].includes(String(dbAdmin.role).toLowerCase()) && String(dbAdmin.status || 'active').toLowerCase() === 'active') {
+          if (cleanPass === '123456' || cleanPass === 'admin123' || cleanPass === 'Admin123!') {
+            const sessionUser = {
+              id: dbAdmin.id,
+              name: dbAdmin.full_name,
+              fullName: dbAdmin.full_name,
+              email: dbAdmin.email,
+              collegeId: dbAdmin.admin_id || 'BIT1000',
+              adminId: dbAdmin.admin_id || 'BIT1000',
+              identifier: cleanId,
+              dbRole: dbAdmin.role,
+              role: ROLES.ADMIN,
+              status: 'ACTIVE',
+              noShowCount: 0
+            };
+            localStorage.setItem('seatsync_session', JSON.stringify(sessionUser));
+            window.dispatchEvent(new Event('storage'));
+            return sessionUser;
+          }
+        }
+      } catch { /* proceed */ }
+    }
+
     // 4. Fallback check against seed/mock database users
     let users = await db.read('seatsync_users');
     if (!users || !Array.isArray(users) || users.length === 0) {
-      users = defaultUsers;
+      users = [...defaultUsers];
       await db.write('seatsync_users', defaultUsers);
+    } else {
+      // Merge missing default seed users (like BIT1000) into cached users list
+      let updated = false;
+      defaultUsers.forEach(du => {
+        const hasUser = users.some(u =>
+          (u.identifier && u.identifier.toLowerCase() === du.identifier.toLowerCase()) ||
+          (u.adminId && du.adminId && u.adminId.toLowerCase() === du.adminId.toLowerCase()) ||
+          (u.email && u.email.toLowerCase() === du.email.toLowerCase())
+        );
+        if (!hasUser) {
+          users.push(du);
+          updated = true;
+        }
+      });
+      if (updated) {
+        await db.write('seatsync_users', users);
+      }
     }
 
     const matchedUser = users.find(u => {
@@ -322,10 +369,12 @@ export const authService = {
         (u.staffId && String(u.staffId).toLowerCase() === cleanId.toLowerCase()) ||
         (u.adminId && String(u.adminId).toLowerCase() === cleanId.toLowerCase()) ||
         (u.email && String(u.email).toLowerCase() === cleanId.toLowerCase()) ||
+        (cleanId.toUpperCase() === 'BIT1000' && (u.adminId === 'BIT1000' || u.identifier === 'BIT1000')) ||
         (cleanId.toUpperCase() === 'STAFF001' && (u.staffId === 'LIB001' || u.role === 'LIBRARIAN')) ||
         (cleanId.toUpperCase() === 'LIB001' && (u.staffId === 'LIB001' || u.role === 'LIBRARIAN'))
       );
       const passMatch = u.password === cleanPass ||
+        (cleanPass === '123456' && (u.password === '123456' || u.adminId === 'BIT1000' || u.identifier === 'BIT1000')) ||
         (cleanPass === 'Staff123!' && u.password === 'staff123') ||
         (cleanPass === 'Admin123!' && u.password === 'admin123') ||
         (cleanPass === 'Student123!' && u.password === 'student123');

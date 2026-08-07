@@ -357,12 +357,37 @@ export default function StudentLayout() {
     fetchNotifications();
     fetchBadgeCounts();
 
-    // Supabase Realtime Subscription for bookings changes
+    // Supabase Realtime Subscription for bookings & notifications changes
     const channel = supabase
       .channel('student-layout-bookings-realtime')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'bookings' }, () => {
         fetchNotifications();
         fetchBadgeCounts();
+        window.dispatchEvent(new CustomEvent('seatsync-sync-event', { detail: { type: 'bookings' } }));
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'slot_occurrences' }, () => {
+        fetchNotifications();
+        fetchBadgeCounts();
+        window.dispatchEvent(new CustomEvent('seatsync-sync-event', { detail: { type: 'slot_occurrences' } }));
+      })
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'notifications' }, (payload) => {
+        if (payload.new && user?.id && (String(payload.new.recipient_id || payload.new.user_id) === String(user.id))) {
+          toast(payload.new.title ? `${payload.new.title}\n${payload.new.message}` : payload.new.message, {
+            duration: 6000,
+            icon: '⚠️',
+            style: {
+              borderRadius: '16px',
+              background: '#FEF2F2',
+              color: '#991B1B',
+              border: '1px solid #FCA5A5',
+              fontWeight: 'bold',
+              fontSize: '12px'
+            }
+          });
+          fetchNotifications();
+          fetchBadgeCounts();
+          window.dispatchEvent(new CustomEvent('seatsync-sync-event', { detail: { type: 'notifications' } }));
+        }
       })
       .subscribe();
 

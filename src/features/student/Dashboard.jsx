@@ -135,22 +135,21 @@ export default function Dashboard() {
         try {
             setLoading(true);
             const [userStats, libData, slotsData, seatsData] = await Promise.all([
-                dashboardService.getStudentStats(user.id),
-                dashboardService.getLibraryInfo(),
-                bookingService.getSlotsAvailability(tomorrowDateStr, user.id),
+                dashboardService.getStudentStats(user.id).catch(() => ({ tomorrowsBookings: 0, completedReservations: 0, activeBooking: null, upcomingBooking: null, totalStudyHours: 0 })),
+                dashboardService.getLibraryInfo().catch(() => ({ libraryName: 'Central Library', operatingHours: '08:00 AM – 10:00 PM', totalSeats: 40 })),
+                bookingService.getSlotsAvailability(tomorrowDateStr, user.id).catch(() => []),
                 db.read('seatsync_seats').catch(() => [])
             ]);
 
             setStats(userStats);
             setLibraryInfo(libData);
-            setSlotsAvailability(slotsData);
+            setSlotsAvailability(slotsData || []);
             if (seatsData) setSeatsList(seatsData);
             setLastUpdated(new Date());
-            setLoading(false);
-            fetchWaitlistSummaries(slotsData);
+            fetchWaitlistSummaries(slotsData || []);
         } catch (error) {
             console.error('Error fetching dashboard data', error);
-            toast.error('Failed to update dashboard data');
+        } finally {
             setLoading(false);
         }
     }, [user, tomorrowDateStr]);
