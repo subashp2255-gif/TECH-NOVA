@@ -2,18 +2,21 @@
 -- SEATSYNC UNIFIED MIGRATION 33: SECURE ENTRY QR SCAN ENGINE & BACKFILL
 -- ====================================================================
 
+-- 0. Ensure pgcrypto extension if available
+CREATE EXTENSION IF NOT EXISTS pgcrypto WITH SCHEMA public;
+
 -- 1. Ensure unique partial index on public.bookings (qr_token)
 CREATE UNIQUE INDEX IF NOT EXISTS bookings_qr_token_unique
 ON public.bookings (qr_token)
 WHERE qr_token IS NOT NULL;
 
--- 2. Idempotent Backfill for active bookings with missing QR tokens
+-- 2. Idempotent Backfill for active bookings with missing QR tokens using built-in MD5 + UUID
 UPDATE public.bookings
-SET qr_token = 'QR-' || UPPER(SUBSTRING(ENCODE(GEN_RANDOM_BYTES(8), 'hex') FROM 1 FOR 16))
+SET qr_token = 'QR-' || UPPER(SUBSTRING(MD5(GEN_RANDOM_UUID()::TEXT || CLOCK_TIMESTAMP()::TEXT) FROM 1 FOR 16))
 WHERE qr_token IS NULL
   AND status IN ('confirmed', 'checked_in', 'awaiting_check_in');
 
--- 3. Update create_seat_booking to generate secure qr_token automatically if omitted
+-- 3. Update create_seat_booking to generate secure qr_token automatically using built-in MD5 + UUID
 CREATE OR REPLACE FUNCTION public.create_seat_booking(
     p_library_id UUID,
     p_floor_id UUID,
@@ -81,9 +84,9 @@ BEGIN
         RAISE EXCEPTION 'You already hold an active reservation for this time slot.';
     END IF;
 
-    -- Generate codes and secure QR token
-    v_booking_code := 'BK-' || UPPER(SUBSTRING(ENCODE(GEN_RANDOM_BYTES(4), 'hex') FROM 1 FOR 8));
-    v_qr_token := 'QR-' || UPPER(SUBSTRING(ENCODE(GEN_RANDOM_BYTES(8), 'hex') FROM 1 FOR 16));
+    -- Generate codes and secure QR token using standard PostgreSQL built-ins (MD5 + UUID)
+    v_booking_code := 'BK-' || UPPER(SUBSTRING(MD5(RANDOM()::TEXT || CLOCK_TIMESTAMP()::TEXT) FROM 1 FOR 8));
+    v_qr_token := 'QR-' || UPPER(SUBSTRING(MD5(GEN_RANDOM_UUID()::TEXT || CLOCK_TIMESTAMP()::TEXT) FROM 1 FOR 16));
 
     SELECT name INTO v_slot_name FROM public.slots WHERE id = p_slot_id;
 
