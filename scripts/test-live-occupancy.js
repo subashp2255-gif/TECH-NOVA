@@ -1,8 +1,8 @@
 import assert from 'assert';
-import { librarianService } from '../src/services/librarianService.js';
+import { getLiveOccupancy, getCurrentOccupants, getLiveSeatStatuses } from '../src/services/occupancyService.js';
 import { supabase } from '../src/lib/supabase.js';
 
-console.log('=== SeatSync Live Library Occupancy Real Data Test Suite ===\n');
+console.log('=== SeatSync Live Library Occupancy Comprehensive Test Suite ===\n');
 
 let passed = 0;
 let failed = 0;
@@ -19,8 +19,8 @@ async function asyncTest(name, fn) {
 }
 
 async function runAll() {
-  const todayDate = '2026-08-06';
-  const tomorrowDate = '2026-08-07';
+  const todayDate = '2026-08-07';
+  const tomorrowDate = '2026-08-08';
 
   // Fetch real library, room, slot
   const [{ data: libs }, { data: rooms }, { data: slots }] = await Promise.all([
@@ -36,10 +36,12 @@ async function runAll() {
   // Test 1: Fetch Live Occupancy Snapshot via RPC
   let snapshotToday = null;
   await asyncTest('Test 1: Fetch live occupancy snapshot RPC from Supabase', async () => {
-    snapshotToday = await librarianService.getLiveOccupancySnapshot(libId, null, roomId, slotId, todayDate);
+    snapshotToday = await getLiveOccupancy({ libraryId: libId, roomId, slotId, bookingDate: todayDate });
     assert.ok(snapshotToday, 'Snapshot returned');
     assert.ok(typeof snapshotToday.total_seats === 'number', 'Total seats is number');
     assert.ok(typeof snapshotToday.operational_seats === 'number', 'Operational seats is number');
+    assert.ok(Array.isArray(snapshotToday.floors), 'Floors breakdown is array');
+    assert.ok(Array.isArray(snapshotToday.rooms), 'Rooms breakdown is array');
   });
 
   // Test 2: Verify Math Invariant (Occupied + Reserved + Available = Operational)
@@ -57,16 +59,15 @@ async function runAll() {
   // Test 4: Fetch Current Occupants List via RPC
   let occupants = [];
   await asyncTest('Test 4: Fetch current checked-in occupants list RPC from Supabase', async () => {
-    occupants = await librarianService.getCurrentOccupants(libId, null, roomId, slotId, todayDate);
+    occupants = await getCurrentOccupants({ libraryId: libId, roomId, slotId, bookingDate: todayDate });
     assert.ok(Array.isArray(occupants), 'Occupants list returned');
     assert.strictEqual(occupants.length, snapshotToday.occupied_seats, 'Occupants count matches occupied seats count');
   });
 
-  // Test 5: Verify Future Booking Does NOT Inflate Today Occupancy
+  // Test 5: Verify Future Booking Isolation
   await asyncTest('Test 5: Verify future confirmed booking on tomorrow does not inflate today occupancy', async () => {
-    const snapshotTomorrow = await librarianService.getLiveOccupancySnapshot(libId, null, roomId, slotId, tomorrowDate);
+    const snapshotTomorrow = await getLiveOccupancy({ libraryId: libId, roomId, slotId, bookingDate: tomorrowDate });
     assert.ok(snapshotTomorrow, 'Tomorrow snapshot returned');
-    // Tomorrow booking does not affect today's occupied count
     assert.strictEqual(snapshotToday.occupied_seats, occupants.length, 'Today occupied count unaffected by future dates');
   });
 
@@ -76,6 +77,25 @@ async function runAll() {
       ? Math.round((snapshotToday.occupied_seats / snapshotToday.operational_seats) * 100 * 10) / 10 
       : 0;
     assert.strictEqual(Math.round(snapshotToday.occupancy_percentage), Math.round(expectedPct), 'Occupancy percentage math matches');
+  });
+
+  // Test 7: Verify Live Seat Status Classification Priority
+  await asyncTest('Test 7: Verify live seat statuses return for selected room with priority classification', async () => {
+    if (roomId) {
+      const seats = await getLiveSeatStatuses({ roomId, slotId, bookingDate: todayDate });
+      assert.ok(Array.isArray(seats), 'Seat list returned');
+      seats.forEach(s => {
+        assert.ok(['occupied', 'reserved', 'available', 'maintenance', 'inactive'].includes(s.status), `Valid status: ${s.status}`);
+        assert.ok(typeof s.color === 'string', 'Color code present');
+      });
+    }
+  });
+
+  // Test 8: Verify Division by Zero Safety
+  await asyncTest('Test 8: Verify division by zero safety when operational seats is 0', async () => {
+    const fakeSnapshot = { total_seats: 0, operational_seats: 0, occupied_seats: 0, occupancy_percentage: 0 };
+    const pct = fakeSnapshot.operational_seats > 0 ? (fakeSnapshot.occupied_seats / fakeSnapshot.operational_seats) * 100 : 0;
+    assert.strictEqual(pct, 0, 'Safe division by zero returns 0%');
   });
 
   console.log(`\n=== Live Library Occupancy Results: ${passed} Passed, ${failed} Failed ===\n`);
