@@ -1,5 +1,5 @@
 import assert from 'assert';
-import { getLiveOccupancy, getCurrentOccupants, getLiveSeatStatuses } from '../src/services/occupancyService.js';
+import { getLiveOccupancy, getCurrentOccupants, getLiveSeatStatuses, getSlotOccupancy } from '../src/services/occupancyService.js';
 import { supabase } from '../src/lib/supabase.js';
 
 console.log('=== SeatSync Live Library Occupancy Comprehensive Test Suite ===\n');
@@ -42,6 +42,7 @@ async function runAll() {
     assert.ok(typeof snapshotToday.operational_seats === 'number', 'Operational seats is number');
     assert.ok(Array.isArray(snapshotToday.floors), 'Floors breakdown is array');
     assert.ok(Array.isArray(snapshotToday.rooms), 'Rooms breakdown is array');
+    assert.ok(Array.isArray(snapshotToday.slots), 'Slots breakdown is array');
   });
 
   // Test 2: Verify Math Invariant (Occupied + Reserved + Available = Operational)
@@ -96,6 +97,20 @@ async function runAll() {
     const fakeSnapshot = { total_seats: 0, operational_seats: 0, occupied_seats: 0, occupancy_percentage: 0 };
     const pct = fakeSnapshot.operational_seats > 0 ? (fakeSnapshot.occupied_seats / fakeSnapshot.operational_seats) * 100 : 0;
     assert.strictEqual(pct, 0, 'Safe division by zero returns 0%');
+  });
+
+  // Test 9: Verify Slot-Wise Breakdown Array & Metrics
+  await asyncTest('Test 9: Verify Slot-Wise Breakdown Array & Per-Slot Math Invariant', async () => {
+    const slotBreakdowns = await getSlotOccupancy({ libraryId: libId, roomId, bookingDate: todayDate });
+    assert.ok(Array.isArray(slotBreakdowns), 'Slot breakdowns array returned');
+    assert.ok(slotBreakdowns.length > 0, 'At least 1 slot breakdown returned');
+    slotBreakdowns.forEach(sl => {
+      assert.ok(sl.slot_id, 'Slot ID present');
+      assert.ok(sl.slot_name, 'Slot Name present');
+      assert.ok(['active', 'upcoming', 'past', 'disabled'].includes(sl.slot_state), `Valid slot state: ${sl.slot_state}`);
+      const sum = sl.occupied_seats + sl.reserved_seats + sl.available_seats;
+      assert.strictEqual(sum, sl.operational_seats, `Slot ${sl.slot_name} math invariant satisfies sum == operational`);
+    });
   });
 
   console.log(`\n=== Live Library Occupancy Results: ${passed} Passed, ${failed} Failed ===\n`);

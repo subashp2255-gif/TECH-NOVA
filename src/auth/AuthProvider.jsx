@@ -28,11 +28,7 @@ export const AuthProvider = ({ children }) => {
 
     const { data: authListener } = supabase.auth.onAuthStateChange(async (event, session) => {
       if (session?.user?.id && isUUID(session.user.id)) {
-        const { data: profile } = await supabase
-          .from('profiles')
-          .select('*')
-          .eq('id', session.user.id)
-          .single();
+        const profile = await authService.ensureMyProfile();
 
         if (profile) {
           const status = String(profile.status || profile.account_status || 'active').toLowerCase();

@@ -30,6 +30,21 @@ export interface RoomOccupancyBreakdown {
   occupancy_percentage: number;
 }
 
+export interface SlotOccupancyBreakdown {
+  slot_id: string;
+  slot_name: string;
+  start_time: string;
+  end_time: string;
+  slot_state: 'active' | 'upcoming' | 'past' | 'disabled';
+  total_seats: number;
+  operational_seats: number;
+  occupied_seats: number;
+  reserved_seats: number;
+  available_seats: number;
+  maintenance_seats: number;
+  occupancy_percentage: number;
+}
+
 export interface LiveOccupancySnapshot {
   library_id: string | null;
   slot_occurrence_id: string | null;
@@ -48,6 +63,7 @@ export interface LiveOccupancySnapshot {
   occupancy_percentage: number;
   floors: FloorOccupancyBreakdown[];
   rooms: RoomOccupancyBreakdown[];
+  slots: SlotOccupancyBreakdown[];
   timestamp: string;
 }
 

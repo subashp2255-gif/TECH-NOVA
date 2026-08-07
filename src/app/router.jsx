@@ -16,6 +16,7 @@ import StudentSignUpPage from '../pages/StudentSignUpPage';
 import ResetPasswordPage from '../pages/ResetPasswordPage';
 import AccountBlockedPage from '../pages/AccountBlockedPage';
 import AccountSuspendedPage from '../pages/AccountSuspendedPage';
+import ProfileCompletionPage from '../pages/ProfileCompletionPage';
 import UnauthorizedPage from '../pages/UnauthorizedPage';
 import NotFoundPage from '../pages/NotFoundPage';
 
@@ -108,6 +109,10 @@ const router = createBrowserRouter([
   {
     path: '/unauthorized',
     element: <UnauthorizedPage />,
+  },
+  {
+    path: '/complete-profile',
+    element: <ProfileCompletionPage />,
   },
 
   // STUDENT DASHBOARD ROUTES

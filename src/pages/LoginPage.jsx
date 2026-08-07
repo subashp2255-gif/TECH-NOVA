@@ -18,7 +18,7 @@ export default function LoginPage() {
   // Auto-redirect if session already active
   useEffect(() => {
     if (user) {
-      const dest = authService.getDashboardRoute(user.role);
+      const dest = authService.getDashboardRoute(user.role, user);
       navigate(dest, { replace: true });
     }
   }, [user, navigate]);
@@ -29,7 +29,7 @@ export default function LoginPage() {
     try {
       const loggedInUser = await login(identifier, password);
       toast.success(`Welcome back, ${loggedInUser.name || loggedInUser.fullName || 'User'}!`);
-      const dest = authService.getDashboardRoute(loggedInUser.role);
+      const dest = authService.getDashboardRoute(loggedInUser.role, loggedInUser);
       navigate(dest, { replace: true });
       return loggedInUser;
     } catch (err) {

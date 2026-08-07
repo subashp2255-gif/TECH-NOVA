@@ -121,6 +121,48 @@ export const authService = {
     return false;
   },
 
+  async ensureMyProfile() {
+    try {
+      const { data, error } = await supabase.rpc('ensure_my_profile');
+      if (error) {
+        console.warn('[authService] ensure_my_profile error:', error.message);
+        return null;
+      }
+      return data;
+    } catch (err) {
+      console.warn('[authService] ensure_my_profile failed:', err);
+      return null;
+    }
+  },
+
+  async updateMyProfile({ fullName, registrationNumber, department, phone, yearOfStudy }) {
+    const { data, error } = await supabase.rpc('update_my_profile', {
+      p_full_name: fullName || null,
+      p_registration_number: registrationNumber || null,
+      p_department: department || null,
+      p_phone: phone || null,
+      p_year_of_study: yearOfStudy ? Number(yearOfStudy) : null
+    });
+
+    if (error) {
+      throw new Error(parseErrorMessage(error, 'Failed to update profile.'));
+    }
+
+    // Update session storage profile
+    const session = this.getCurrentUser();
+    if (session && data) {
+      session.name = data.full_name;
+      session.fullName = data.full_name;
+      session.collegeId = data.registration_number;
+      session.department = data.department;
+      session.yearOfStudy = data.year_of_study;
+      localStorage.setItem('seatsync_session', JSON.stringify(session));
+      window.dispatchEvent(new Event('storage'));
+    }
+
+    return data;
+  },
+
   async login(identifier, password, rememberMe = true) {
     const cleanId = String(identifier || '').trim();
     const cleanPass = String(password || '').trim();
@@ -166,30 +208,42 @@ export const authService = {
       if (!authError && authData?.user) {
         authSucceeded = true;
         authUser = authData.user;
+      } else if (authError) {
+        throw new Error(parseErrorMessage(authError, 'Invalid email/ID or password.'));
       }
-    } catch { /* proceed to fallback check */ }
+    } catch (err) {
+      if (err.message && (err.message.includes('Invalid') || err.message.includes('rate limit'))) {
+        throw err;
+      }
+    }
 
     // 3. If Supabase Auth verified the credentials
     if (authSucceeded && authUser) {
-      const { data: profile } = await supabase
-        .from('profiles')
-        .select('*')
-        .eq('id', authUser.id)
-        .single();
+      // Call ensure_my_profile() to sync profile, last_login_at, and verified email atomically
+      let profile = await this.ensureMyProfile();
+
+      if (!profile) {
+        const { data: fallbackProfile } = await supabase
+          .from('profiles')
+          .select('*')
+          .eq('id', authUser.id)
+          .single();
+        profile = fallbackProfile;
+      }
 
       if (profile) {
         const accountStatus = String(profile.status || profile.account_status || 'active').toLowerCase();
 
         if (accountStatus === 'blocked') {
           await supabase.auth.signOut();
-          const err = new Error(`Account Blocked: ${profile.blocked_reason || 'Access restricted by administrator.'}`);
+          const err = new Error(`Your SeatSync account is blocked. Please contact the library administrator. (${profile.blocked_reason || 'Blocked'})`);
           err.code = 'ACCOUNT_BLOCKED';
           throw err;
         }
 
         if (accountStatus === 'suspended') {
           await supabase.auth.signOut();
-          const err = new Error('Account Suspended: Access temporarily restricted.');
+          const err = new Error('Your SeatSync account is suspended. Please contact the library administrator.');
           err.code = 'ACCOUNT_SUSPENDED';
           throw err;
         }
@@ -216,25 +270,23 @@ export const authService = {
           }
         }
 
-        try {
-          await supabase
-            .from('profiles')
-            .update({ last_login_at: new Date().toISOString() })
-            .eq('id', profile.id);
-        } catch { /* non-blocking */ }
-
         const sessionUser = {
           id: profile.id,
           name: profile.full_name,
+          fullName: profile.full_name,
           email: profile.email,
           collegeId: profile.registration_number,
+          registration_number: profile.registration_number,
+          department: profile.department,
+          yearOfStudy: profile.year_of_study,
           staffId: profile.staff_id || profile.registration_number,
           adminId: profile.admin_id || profile.registration_number,
           identifier: cleanId,
           dbRole: profile.role,
           role: mappedRole,
           status: accountStatus.toUpperCase(),
-          noShowCount: profile.no_show_count || 0
+          noShowCount: profile.no_show_count || 0,
+          needsProfileCompletion: mappedRole === ROLES.STUDENT && (!profile.registration_number || !profile.department)
         };
 
         // Audit Logging for Librarian Login Success
@@ -308,12 +360,12 @@ export const authService = {
 
     const status = String(matchedUser.status || 'ACTIVE').toUpperCase();
     if (status === 'BLOCKED') {
-      const err = new Error('Account Blocked: Access restricted by administrator.');
+      const err = new Error('Your SeatSync account is blocked. Please contact the library administrator.');
       err.code = 'ACCOUNT_BLOCKED';
       throw err;
     }
     if (status === 'SUSPENDED') {
-      const err = new Error('Account Suspended: Access temporarily restricted.');
+      const err = new Error('Your SeatSync account is suspended. Please contact the library administrator.');
       err.code = 'ACCOUNT_SUSPENDED';
       throw err;
     }
@@ -323,7 +375,8 @@ export const authService = {
 
     const sessionUser = {
       ...matchedUser,
-      role
+      role,
+      needsProfileCompletion: role === ROLES.STUDENT && (!matchedUser.collegeId && !matchedUser.registration_number)
     };
 
     localStorage.setItem('seatsync_session', JSON.stringify(sessionUser));
@@ -358,40 +411,29 @@ export const authService = {
       console.warn('Local user save warning:', localErr);
     }
 
-    // Try Supabase Auth sign up gracefully (Always student)
-    try {
-      const { data: authData, error: authError } = await supabase.auth.signUp({
-        email: cleanEmail,
-        password,
-        options: {
-          data: {
-            full_name: fullName.trim(),
-            registration_number: cleanRegNo,
-            department,
-            year_of_study: yearOfStudy,
-            role: 'student' // Strictly enforced student role for public signups
-          }
+    // Supabase Auth sign up (Strictly non-privileged metadata)
+    const { data: authData, error: authError } = await supabase.auth.signUp({
+      email: cleanEmail,
+      password,
+      options: {
+        data: {
+          full_name: fullName.trim(),
+          registration_number: cleanRegNo,
+          department,
+          year_of_study: Number(yearOfStudy)
+          // No role parameter passed: DB trigger defaults strictly to student
         }
-      });
-
-      if (authError) {
-        console.warn('Supabase auth sign up warning:', authError.message || authError);
-      } else if (authData?.user && authData?.session) {
-        try {
-          await supabase.from('profiles').update({
-            full_name: fullName.trim(),
-            registration_number: cleanRegNo,
-            department,
-            year_of_study: yearOfStudy,
-            role: 'student'
-          }).eq('id', authData.user.id);
-        } catch { /* proceed */ }
       }
-    } catch (supaErr) {
-      console.warn('Supabase connection error:', supaErr);
+    });
+
+    if (authError) {
+      console.warn('Supabase auth sign up warning:', authError.message || authError);
+      if (authError.message && (authError.message.includes('already registered') || authError.message.includes('already exists'))) {
+        throw new Error('An account with this email is already registered.');
+      }
     }
 
-    return localUser || { user: { email: cleanEmail, name: fullName } };
+    return localUser || { user: authData?.user, email: cleanEmail, name: fullName };
   },
 
   async requestPasswordReset(identifier) {
@@ -477,7 +519,10 @@ export const authService = {
     window.dispatchEvent(new Event('storage'));
   },
 
-  getDashboardRoute(role) {
+  getDashboardRoute(role, session = null) {
+    if (session?.needsProfileCompletion) {
+      return '/complete-profile';
+    }
     switch (role) {
       case ROLES.STUDENT:
         return '/student/dashboard';

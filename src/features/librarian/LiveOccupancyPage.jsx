@@ -6,6 +6,8 @@ import {
   getFloorOccupancy, 
   getCurrentOccupants, 
   getLiveSeatStatuses,
+  getSlotOccurrenceOccupancy,
+  getReservedStudentsForOccurrence,
   getTodayKolkataDate, 
   getCurrentOrNextKolkataSlot 
 } from '../../services/occupancyService';
@@ -18,7 +20,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } f
 import {
   Eye, Armchair, RefreshCw, Layers, Calendar, Clock, MapPin, AlertCircle, CheckCircle2, 
   User, LogOut, LogIn, Wrench, ShieldAlert, Lock, Activity, Filter, RotateCcw, 
-  ChevronDown, ChevronUp, Building2, Users, AlertTriangle
+  ChevronDown, ChevronUp, Building2, Users, AlertTriangle, ArrowRight
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 
@@ -55,9 +57,29 @@ export default function LiveOccupancyPage() {
   const [selectedSeat, setSelectedSeat] = useState(null);
   const [lastUpdated, setLastUpdated] = useState(new Date());
 
+  // Reserved Students Modal state
+  const [reservedStudentsModalOpen, setReservedStudentsModalOpen] = useState(false);
+  const [reservedStudentsList, setReservedStudentsList] = useState([]);
+  const [loadingReservedStudents, setLoadingReservedStudents] = useState(false);
+  const [selectedOccurrenceTitle, setSelectedOccurrenceTitle] = useState('');
+
+  const handleViewReservedStudents = async (sl, e) => {
+    if (e) e.stopPropagation();
+    setSelectedOccurrenceTitle(`${sl.slot_name || 'Slot'} (${format12HourTime(sl.start_time)} - ${format12HourTime(sl.end_time)})`);
+    setReservedStudentsModalOpen(true);
+    setLoadingReservedStudents(true);
+    try {
+      const list = await getReservedStudentsForOccurrence(sl.slot_occurrence_id);
+      setReservedStudentsList(list);
+    } catch (err) {
+      toast.error(err.message || 'Failed to load reserved students.');
+    } finally {
+      setLoadingReservedStudents(false);
+    }
+  };
+
   // Activity feed state
   const [activityLog, setActivityLog] = useState([]);
-  const [activityCollapsed, setActivityCollapsed] = useState(false);
 
   // 1. Initial filter options from Supabase tables
   useEffect(() => {
@@ -138,11 +160,13 @@ export default function LiveOccupancyPage() {
           slotId: selectedSlotId,
           bookingDate: selectedDate
         }),
-        selectedRoomId ? getLiveSeatStatuses({
+        getLiveSeatStatuses({
+          libraryId: selectedLibraryId,
+          floorId: selectedFloorId,
           roomId: selectedRoomId,
           slotId: selectedSlotId,
           bookingDate: selectedDate
-        }) : Promise.resolve([])
+        })
       ]);
 
       setSnapshotMetrics(snapshot);
@@ -633,7 +657,128 @@ export default function LiveOccupancyPage() {
         </div>
       </Card>
 
-      {/* 7. PHYSICAL SEAT MAP GRID */}
+      {/* 7. NEW: SLOT-WISE LIVE OCCUPANCY BREAKDOWN */}
+      <Card className="border border-slate-200/90 bg-white rounded-3xl p-6 shadow-xs space-y-5">
+        <div className="flex flex-wrap items-center justify-between gap-4 border-b border-slate-100 pb-3">
+          <div>
+            <h2 className="text-base font-black text-navy flex items-center gap-2">
+              <Clock size={18} className="text-teal-600" /> Slot-Wise Live Occupancy Breakdown
+            </h2>
+            <p className="text-xs text-slate-500 font-medium mt-0.5">
+              Live capacity breakdown across all operational time slots for {selectedDate}. Click any slot card to inspect its seat map.
+            </p>
+          </div>
+          <Badge className="bg-brandBlue text-white border-blue-600 text-xs font-mono font-bold">
+            {(snapshotMetrics?.slots || []).length} Daily Slots
+          </Badge>
+        </div>
+
+        {loading ? (
+          <div className="p-8 text-center text-xs text-slate-400 font-mono animate-pulse">
+            Loading slot-wise occupancy breakdown...
+          </div>
+        ) : (snapshotMetrics?.slots || []).length === 0 ? (
+          <div className="p-8 text-center text-xs text-slate-400 font-mono italic">
+            No slot data configured for this library.
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+            {(snapshotMetrics?.slots || []).map(sl => {
+              const isSelected = selectedSlotId === sl.slot_id;
+              const isCurrentActive = sl.slot_state === 'active';
+              return (
+                <motion.div
+                  key={sl.slot_id}
+                  whileHover={{ y: -3 }}
+                  className={`
+                    border rounded-3xl p-4 space-y-3 cursor-pointer transition-all shadow-xs relative overflow-hidden
+                    ${isSelected ? 'border-teal-500 ring-2 ring-teal-500/20 bg-teal-50/20' : 'border-slate-200 bg-white hover:border-slate-300'}
+                  `}
+                  onClick={() => setSelectedSlotId(sl.slot_id)}
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <div>
+                      <h4 className="text-xs font-black text-navy">{sl.slot_name}</h4>
+                      <p className="text-[10px] text-slate-500 font-mono mt-0.5">
+                        {format12HourTime(sl.start_time)} – {format12HourTime(sl.end_time)}
+                      </p>
+                    </div>
+
+                    {isCurrentActive && (
+                      <Badge className="bg-emerald-500 text-white text-[9px] font-mono font-black animate-pulse">
+                        Active Now
+                      </Badge>
+                    )}
+                    {sl.slot_state === 'upcoming' && (
+                      <Badge className="bg-blue-100 text-blue-800 text-[9px] font-mono font-bold">
+                        Upcoming
+                      </Badge>
+                    )}
+                    {sl.slot_state === 'past' && (
+                      <Badge className="bg-slate-100 text-slate-600 text-[9px] font-mono font-medium">
+                        Past
+                      </Badge>
+                    )}
+                    {sl.slot_state === 'disabled' && (
+                      <Badge className="bg-rose-100 text-rose-700 text-[9px] font-mono font-bold">
+                        Disabled
+                      </Badge>
+                    )}
+                  </div>
+
+                  {/* Meter Progress Bar */}
+                  <div className="space-y-1">
+                    <div className="flex justify-between items-center text-[10px] font-mono font-bold">
+                      <span className="text-slate-500">Occupancy</span>
+                      <span className="text-navy">{sl.occupancy_percentage}% ({sl.occupied_seats}/{sl.operational_seats})</span>
+                    </div>
+                    <div className="w-full bg-slate-100 rounded-full h-2 overflow-hidden">
+                      <div
+                        className={`h-full transition-all duration-500 ${
+                          sl.occupancy_percentage >= 85 ? 'bg-[#EF4444]' : sl.occupancy_percentage >= 60 ? 'bg-[#F59E0B]' : 'bg-[#22C55E]'
+                        }`}
+                        style={{ width: `${Math.min(100, sl.occupancy_percentage)}%` }}
+                      />
+                    </div>
+                  </div>
+
+                  {/* Slot Stats Grid */}
+                  <div className="grid grid-cols-3 gap-1 text-center font-mono text-[10px] pt-1 border-t border-slate-100">
+                    <div className="p-1 rounded-xl bg-emerald-50 text-emerald-800">
+                      <div className="font-black">{sl.available_seats}</div>
+                      <div className="text-[8px] uppercase tracking-tighter">Avail</div>
+                    </div>
+                    <div className="p-1 rounded-xl bg-amber-50 text-amber-800">
+                      <div className="font-black">{sl.reserved_seats}</div>
+                      <div className="text-[8px] uppercase tracking-tighter">Res</div>
+                    </div>
+                    <div className="p-1 rounded-xl bg-red-50 text-red-800">
+                      <div className="font-black">{sl.occupied_seats}</div>
+                      <div className="text-[8px] uppercase tracking-tighter">Occ</div>
+                    </div>
+                  </div>
+
+                  {/* View Reserved Students Action */}
+                  <Button
+                    onClick={(e) => handleViewReservedStudents(sl, e)}
+                    className="w-full h-7 text-[10px] font-bold bg-navy hover:bg-slate-800 text-white rounded-xl flex items-center justify-center gap-1 mt-1"
+                  >
+                    <Users size={12} /> View Reserved Students ({sl.reserved_seats + sl.occupied_seats})
+                  </Button>
+
+                  {isSelected && (
+                    <div className="flex items-center justify-center gap-1 text-[10px] font-bold text-teal-700 pt-0.5">
+                      <span>Currently Viewing Map</span> <ArrowRight size={12} />
+                    </div>
+                  )}
+                </motion.div>
+              );
+            })}
+          </div>
+        )}
+      </Card>
+
+      {/* 8. PHYSICAL SEAT MAP GRID */}
       <Card className="border border-slate-200/90 bg-white rounded-3xl p-6 shadow-xs space-y-6">
         <div className="flex flex-wrap items-center justify-between gap-4 border-b border-slate-100 pb-4">
           <div>
@@ -641,7 +786,7 @@ export default function LiveOccupancyPage() {
               <Layers size={18} className="text-teal-600" /> {currentRoomObj?.name || 'Selected Room Seat Map'}
             </h2>
             <p className="text-xs text-slate-500 font-medium mt-0.5">
-              Interactive physical desk statuses for selected room. Click any desk for action options.
+              Interactive physical desk statuses for {currentSlotObj?.name || 'Selected Slot'}. Click any desk for action options.
             </p>
           </div>
           <Badge className="bg-slate-100 text-slate-700 border-slate-200 text-xs font-mono font-bold">
@@ -740,7 +885,7 @@ export default function LiveOccupancyPage() {
         </div>
       </Card>
 
-      {/* 8. CURRENTLY CHECKED-IN OCCUPANTS LIST */}
+      {/* 9. CURRENTLY CHECKED-IN OCCUPANTS LIST */}
       <Card className="border border-slate-200/90 bg-white rounded-3xl p-6 shadow-xs space-y-4">
         <div className="flex flex-wrap items-center justify-between gap-4 border-b border-slate-100 pb-3">
           <div>
@@ -748,7 +893,7 @@ export default function LiveOccupancyPage() {
               <Users size={18} className="text-teal-600" /> Currently Checked-In Occupants ({occupantsList.length})
             </h2>
             <p className="text-xs text-slate-500 font-medium mt-0.5">
-              Students who are currently seated at their desks. strictly active checked-in bookings.
+              Students who are currently seated at their desks for active slot ({currentSlotObj?.name || 'Current Slot'}).
             </p>
           </div>
           <Badge className="bg-teal-100 text-teal-800 border-teal-200 text-xs font-mono font-bold">
@@ -804,7 +949,7 @@ export default function LiveOccupancyPage() {
         )}
       </Card>
 
-      {/* 9. FLOOR-WISE & ROOM-WISE BREAKDOWN TABLES */}
+      {/* 10. FLOOR-WISE & ROOM-WISE BREAKDOWN TABLES */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* Floor Breakdown */}
         <Card className="border border-slate-200/90 bg-white rounded-3xl p-5 shadow-xs space-y-4">
@@ -877,7 +1022,7 @@ export default function LiveOccupancyPage() {
         </Card>
       </div>
 
-      {/* 10. SEAT DETAILS DIALOG */}
+      {/* 11. SEAT DETAILS DIALOG */}
       {selectedSeat && (
         <Dialog open={!!selectedSeat} onOpenChange={() => setSelectedSeat(null)}>
           <DialogContent className="max-w-md bg-white border border-slate-200 text-navy p-6 rounded-3xl space-y-4 shadow-2xl">
@@ -974,6 +1119,59 @@ export default function LiveOccupancyPage() {
         </Dialog>
       )}
 
+      {/* 10. RESERVED STUDENTS LIST MODAL FOR LIBRARIANS */}
+      <Dialog open={reservedStudentsModalOpen} onOpenChange={setReservedStudentsModalOpen}>
+        <DialogContent className="max-w-2xl bg-white rounded-3xl p-6 border border-slate-200 shadow-2xl">
+          <DialogHeader>
+            <DialogTitle className="text-lg font-black text-navy flex items-center gap-2">
+              <Users size={20} className="text-teal-600" />
+              <span>Reserved Students — {selectedOccurrenceTitle}</span>
+            </DialogTitle>
+            <DialogDescription className="text-xs text-slate-500 font-medium">
+              Real-time student reservations and check-in statuses for this slot occurrence.
+            </DialogDescription>
+          </DialogHeader>
+
+          {loadingReservedStudents ? (
+            <div className="py-8 text-center text-xs font-mono text-slate-400 animate-pulse">
+              Fetching reserved student list...
+            </div>
+          ) : reservedStudentsList.length === 0 ? (
+            <div className="py-8 text-center text-xs font-mono text-slate-400 italic">
+              No active student reservations for this slot occurrence.
+            </div>
+          ) : (
+            <div className="max-h-96 overflow-y-auto space-y-2 pr-1">
+              {reservedStudentsList.map((stu) => (
+                <div key={stu.bookingId} className="p-3 bg-slate-50 border border-slate-200/90 rounded-2xl flex items-center justify-between text-xs hover:border-slate-300 transition-colors">
+                  <div className="space-y-0.5">
+                    <div className="font-bold text-navy text-xs flex items-center gap-2">
+                      <span>{stu.studentName}</span>
+                      <Badge className="bg-teal-600 text-white font-mono text-[10px]">{stu.seatNumber}</Badge>
+                    </div>
+                    <div className="text-[11px] text-slate-500 font-mono">
+                      Reg: <span className="font-bold text-navy">{stu.registrationNumber}</span> • {stu.department}
+                    </div>
+                    <div className="text-[10px] text-slate-400 font-mono">
+                      Code: {stu.bookingCode} • QR Token: {stu.qrToken ? stu.qrToken.slice(0, 12) + '...' : 'N/A'}
+                    </div>
+                  </div>
+                  <div className="text-right space-y-1">
+                    <Badge className={stu.bookingStatus.includes('Occupied') ? 'bg-emerald-100 text-emerald-800 font-bold text-[10px]' : 'bg-amber-100 text-amber-800 font-bold text-[10px]'}>
+                      {stu.bookingStatus}
+                    </Badge>
+                    {stu.checkedInAt && (
+                      <p className="text-[10px] text-slate-400 font-mono">
+                        In: {new Date(stu.checkedInAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                      </p>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

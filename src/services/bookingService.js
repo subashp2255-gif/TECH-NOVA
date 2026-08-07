@@ -490,31 +490,30 @@ export const bookingService = {
       const fId = (isUUID(floorId) ? floorId : roomRow?.floor_id) || floorRow?.id;
 
       if (libId && roomId && fId && isUUID(resolvedSeatId) && isUUID(resolvedSlotId)) {
-        const { data: result, error } = await supabase.rpc('create_booking', {
+        const { data: result, error } = await supabase.rpc('create_seat_booking', {
           p_library_id: libId,
           p_floor_id: fId,
           p_room_id: roomId,
           p_seat_id: resolvedSeatId,
           p_slot_id: resolvedSlotId,
           p_booking_date: dateStr,
-          p_booking_source: 'online',
           p_idempotency_key: key
         });
 
         if (error) {
-          if (error.code === '23505' || error.message.includes('idx_unique_active_seat_booking') || error.message.includes('SEAT_ALREADY_RESERVED')) {
-            throw new Error('This seat has just been reserved by another student. Please select another seat.');
+          if (error.code === '23505' || error.message.includes('idx_bookings_active_occurrence_seat') || error.message.includes('reserved by another student')) {
+            throw new Error('This seat was just reserved by another student. Please select another seat.');
           }
-          if (error.message.includes('STUDENT_OVERLAP')) {
-            throw new Error('You already have an active reservation for an overlapping time slot on this date.');
+          if (error.message.includes('active booking')) {
+            throw new Error('You already have an active booking for this time slot occurrence.');
           }
           throw new Error(error.message);
         }
 
         if (result && result.success) return result;
         if (result && result.error) {
-          if (result.error.includes('SEAT_ALREADY_RESERVED')) {
-            throw new Error('This seat has just been reserved by another student. Please select another seat.');
+          if (result.error.includes('reserved by another student')) {
+            throw new Error('This seat was just reserved by another student. Please select another seat.');
           }
           throw new Error(result.error);
         }

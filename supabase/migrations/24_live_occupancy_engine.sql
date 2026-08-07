@@ -38,6 +38,7 @@ DECLARE
     v_pct NUMERIC := 0;
     v_floors_json JSONB := '[]'::jsonb;
     v_rooms_json JSONB := '[]'::jsonb;
+    v_slots_json JSONB := '[]'::jsonb;
     v_slot_occurrence_id UUID := NULL;
 BEGIN
     -- Determine default Library ID if not provided
@@ -84,7 +85,7 @@ BEGIN
         END IF;
     END IF;
 
-    -- Aggregate Overall Capacity Metrics
+    -- Aggregate Overall Capacity Metrics for selected Slot
     SELECT 
         COUNT(DISTINCT s.id)::INTEGER,
         COUNT(DISTINCT CASE WHEN s.status != 'disabled' AND COALESCE(r.status::text, 'active') = 'active' THEN s.id END)::INTEGER,
@@ -135,8 +136,6 @@ BEGIN
       AND (p_room_id IS NULL OR r.id = p_room_id);
 
     v_reserved_seats := COALESCE(v_reserved_seats, 0);
-
-    -- Available Seats
     v_available_seats := GREATEST(0, v_operational_seats - v_occupied_seats - v_reserved_seats);
 
     -- Occupancy Percentage
@@ -218,6 +217,52 @@ BEGIN
         ORDER BY f.name, r.name
     ) room_data;
 
+    -- Slot-wise Breakdown JSON across ALL daily slots
+    SELECT COALESCE(jsonb_agg(slot_data), '[]'::jsonb)
+    INTO v_slots_json
+    FROM (
+        SELECT 
+            sl.id AS slot_id,
+            sl.name AS slot_name,
+            sl.start_time,
+            sl.end_time,
+            CASE 
+                WHEN (so.status IN ('disabled', 'cancelled') OR sl.status IN ('disabled', 'cancelled')) THEN 'disabled'
+                WHEN v_date = v_now_kolkata::DATE AND v_time >= sl.start_time AND v_time <= sl.end_time THEN 'active'
+                WHEN v_date = v_now_kolkata::DATE AND v_time > sl.end_time THEN 'past'
+                ELSE 'upcoming'
+            END AS slot_state,
+            COUNT(DISTINCT s.id)::INTEGER AS total_seats,
+            COUNT(DISTINCT CASE WHEN s.status = 'maintenance' OR sm.id IS NOT NULL THEN s.id END)::INTEGER AS maintenance_seats,
+            GREATEST(0, COUNT(DISTINCT CASE WHEN s.status != 'disabled' THEN s.id END) - COUNT(DISTINCT CASE WHEN s.status = 'maintenance' OR sm.id IS NOT NULL THEN s.id END))::INTEGER AS operational_seats,
+            COUNT(DISTINCT CASE WHEN b.status = 'checked_in' AND b.checked_in_at IS NOT NULL AND b.checked_out_at IS NULL THEN b.seat_id END)::INTEGER AS occupied_seats,
+            COUNT(DISTINCT CASE WHEN b.status IN ('confirmed', 'awaiting_check_in') AND b.checked_in_at IS NULL THEN b.seat_id END)::INTEGER AS reserved_seats,
+            GREATEST(0, 
+                (COUNT(DISTINCT CASE WHEN s.status != 'disabled' THEN s.id END) - COUNT(DISTINCT CASE WHEN s.status = 'maintenance' OR sm.id IS NOT NULL THEN s.id END)) -
+                COUNT(DISTINCT CASE WHEN b.status = 'checked_in' AND b.checked_in_at IS NOT NULL AND b.checked_out_at IS NULL THEN b.seat_id END) -
+                COUNT(DISTINCT CASE WHEN b.status IN ('confirmed', 'awaiting_check_in') AND b.checked_in_at IS NULL THEN b.seat_id END)
+            )::INTEGER AS available_seats,
+            CASE 
+                WHEN (COUNT(DISTINCT CASE WHEN s.status != 'disabled' THEN s.id END) - COUNT(DISTINCT CASE WHEN s.status = 'maintenance' OR sm.id IS NOT NULL THEN s.id END)) > 0 
+                THEN ROUND((COUNT(DISTINCT CASE WHEN b.status = 'checked_in' AND b.checked_in_at IS NOT NULL AND b.checked_out_at IS NULL THEN b.seat_id END)::NUMERIC / 
+                            (COUNT(DISTINCT CASE WHEN s.status != 'disabled' THEN s.id END) - COUNT(DISTINCT CASE WHEN s.status = 'maintenance' OR sm.id IS NOT NULL THEN s.id END))::NUMERIC) * 100, 1)
+                ELSE 0 
+            END AS occupancy_percentage
+        FROM public.slots sl
+        CROSS JOIN public.seats s
+        JOIN public.rooms r ON r.id = s.room_id
+        JOIN public.floors f ON f.id = r.floor_id
+        LEFT JOIN public.slot_occurrences so ON so.slot_id = sl.id AND so.occurrence_date = v_date
+        LEFT JOIN public.seat_maintenance sm ON sm.seat_id = s.id AND (sm.status IS DISTINCT FROM 'Resolved' AND sm.completed_at IS NULL)
+        LEFT JOIN public.bookings b ON b.seat_id = s.id AND b.booking_date = v_date AND b.slot_id = sl.id
+        WHERE (sl.library_id = v_library_id OR sl.library_id IS NULL)
+          AND (v_library_id IS NULL OR f.library_id = v_library_id)
+          AND (p_floor_id IS NULL OR f.id = p_floor_id)
+          AND (p_room_id IS NULL OR r.id = p_room_id)
+        GROUP BY sl.id, sl.name, sl.start_time, sl.end_time, so.status, sl.status
+        ORDER BY sl.start_time ASC
+    ) slot_data;
+
     RETURN jsonb_build_object(
         'library_id', v_library_id,
         'slot_occurrence_id', v_slot_occurrence_id,
@@ -236,6 +281,7 @@ BEGIN
         'occupancy_percentage', v_pct,
         'floors', v_floors_json,
         'rooms', v_rooms_json,
+        'slots', v_slots_json,
         'timestamp', NOW()
     );
 END;
@@ -327,13 +373,17 @@ END;
 $$;
 
 
--- 3. GET LIVE SEAT STATUSES RPC FUNCTION
+-- 3. GET LIVE SEAT STATUSES RPC FUNCTION (ALLOW OPTIONAL ROOM / FLOOR / LIBRARY)
+DROP FUNCTION IF EXISTS public.get_live_seat_statuses(UUID, UUID, DATE, UUID, UUID) CASCADE;
 DROP FUNCTION IF EXISTS public.get_live_seat_statuses(UUID, UUID, DATE) CASCADE;
+DROP FUNCTION IF EXISTS public.get_live_seat_statuses CASCADE;
 
 CREATE OR REPLACE FUNCTION public.get_live_seat_statuses(
-    p_room_id UUID,
+    p_room_id UUID DEFAULT NULL,
     p_slot_id UUID DEFAULT NULL,
-    p_booking_date DATE DEFAULT NULL
+    p_booking_date DATE DEFAULT NULL,
+    p_library_id UUID DEFAULT NULL,
+    p_floor_id UUID DEFAULT NULL
 )
 RETURNS JSONB
 LANGUAGE plpgsql
@@ -418,13 +468,16 @@ BEGIN
             END AS computed_status
         FROM public.seats s
         JOIN public.rooms r ON r.id = s.room_id
+        JOIN public.floors f ON f.id = r.floor_id
         LEFT JOIN public.seat_maintenance sm ON sm.seat_id = s.id AND (sm.status IS DISTINCT FROM 'Resolved' AND sm.completed_at IS NULL)
         LEFT JOIN public.bookings b ON b.seat_id = s.id 
           AND b.booking_date = v_date 
           AND b.slot_id = v_slot_id 
           AND b.status IN ('confirmed', 'awaiting_check_in', 'checked_in')
         LEFT JOIN public.profiles p ON p.id = b.student_id
-        WHERE s.room_id = p_room_id
+        WHERE (p_room_id IS NULL OR s.room_id = p_room_id)
+          AND (p_floor_id IS NULL OR f.id = p_floor_id)
+          AND (p_library_id IS NULL OR f.library_id = p_library_id)
     ) seat_data;
 
     RETURN v_seats_json;
@@ -435,4 +488,4 @@ $$;
 -- 4. RLS GRANTS & PERMISSIONS
 GRANT EXECUTE ON FUNCTION public.get_live_occupancy_snapshot(UUID, UUID, UUID, UUID, DATE) TO authenticated, anon;
 GRANT EXECUTE ON FUNCTION public.get_current_occupants(UUID, UUID, UUID, UUID, DATE) TO authenticated, anon;
-GRANT EXECUTE ON FUNCTION public.get_live_seat_statuses(UUID, UUID, DATE) TO authenticated, anon;
+GRANT EXECUTE ON FUNCTION public.get_live_seat_statuses(UUID, UUID, DATE, UUID, UUID) TO authenticated, anon;

@@ -60,7 +60,15 @@ export async function getFloorOccupancy({ libraryId = null, floorId = null, slot
 }
 
 /**
- * 3. Fetch currently checked-in occupants list
+ * 3. Fetch slot-wise occupancy breakdown across all daily slots
+ */
+export async function getSlotOccupancy({ libraryId = null, floorId = null, roomId = null, bookingDate = null } = {}) {
+  const snapshot = await getLiveOccupancy({ libraryId, floorId, roomId, bookingDate });
+  return snapshot?.slots || [];
+}
+
+/**
+ * 4. Fetch currently checked-in occupants list
  */
 export async function getCurrentOccupants({ libraryId = null, floorId = null, roomId = null, slotId = null, bookingDate = null } = {}) {
   const { data, error } = await supabase.rpc('get_current_occupants', {
@@ -95,17 +103,15 @@ export async function getCurrentOccupants({ libraryId = null, floorId = null, ro
 }
 
 /**
- * 4. Fetch detailed seat statuses for a room
+ * 5. Fetch detailed seat statuses for a room / floor / library
  */
-export async function getLiveSeatStatuses({ roomId, slotId = null, bookingDate = null }) {
-  if (!roomId || !isUUID(roomId)) {
-    return [];
-  }
-
+export async function getLiveSeatStatuses({ libraryId = null, floorId = null, roomId = null, slotId = null, bookingDate = null } = {}) {
   const { data, error } = await supabase.rpc('get_live_seat_statuses', {
-    p_room_id: roomId,
+    p_room_id: roomId && isUUID(roomId) ? roomId : null,
     p_slot_id: slotId && isUUID(slotId) ? slotId : null,
-    p_booking_date: bookingDate || getTodayKolkataDate()
+    p_booking_date: bookingDate || getTodayKolkataDate(),
+    p_library_id: libraryId && isUUID(libraryId) ? libraryId : null,
+    p_floor_id: floorId && isUUID(floorId) ? floorId : null
   });
 
   if (error) {
@@ -114,11 +120,65 @@ export async function getLiveSeatStatuses({ roomId, slotId = null, bookingDate =
   return data || [];
 }
 
+/**
+ * 6. Fetch slot occurrence live occupancy summary
+ */
+export async function getSlotOccurrenceOccupancy({ libraryId = null, occurrenceDate = null, roomId = null, slotOccurrenceId = null } = {}) {
+  const { data, error } = await supabase.rpc('get_slot_occurrence_occupancy', {
+    p_library_id: libraryId && isUUID(libraryId) ? libraryId : null,
+    p_occurrence_date: occurrenceDate || getTodayKolkataDate(),
+    p_room_id: roomId && isUUID(roomId) ? roomId : null,
+    p_slot_occurrence_id: slotOccurrenceId && isUUID(slotOccurrenceId) ? slotOccurrenceId : null
+  });
+
+  if (error) {
+    throw new Error(`[Supabase Error] ${error.message}`);
+  }
+  return data || [];
+}
+
+/**
+ * 7. Fetch reserved students list for a specific slot occurrence (Librarians & Admins only)
+ */
+export async function getReservedStudentsForOccurrence(slotOccurrenceId) {
+  if (!slotOccurrenceId || !isUUID(slotOccurrenceId)) return [];
+
+  const { data, error } = await supabase.rpc('get_reserved_students_for_occurrence', {
+    p_slot_occurrence_id: slotOccurrenceId
+  });
+
+  if (error) {
+    throw new Error(`[Supabase Error] ${error.message}`);
+  }
+
+  return (data || []).map(r => ({
+    bookingId: r.booking_id,
+    bookingCode: r.booking_code,
+    studentId: r.student_id,
+    studentName: r.student_name,
+    registrationNumber: r.registration_number,
+    department: r.department,
+    seatId: r.seat_id,
+    seatNumber: r.seat_number,
+    bookingDate: r.booking_date,
+    slotName: r.slot_name,
+    startTime: r.start_time,
+    endTime: r.end_time,
+    bookingStatus: r.booking_status,
+    checkedInAt: r.checked_in_at,
+    checkedOutAt: r.checked_out_at,
+    qrToken: r.qr_token
+  }));
+}
+
 export const occupancyService = {
   getLiveOccupancy,
   getFloorOccupancy,
+  getSlotOccupancy,
   getCurrentOccupants,
   getLiveSeatStatuses,
+  getSlotOccurrenceOccupancy,
+  getReservedStudentsForOccurrence,
 
   async getOccupancy({ roomId, bookingDate, slotId }) {
     try {
