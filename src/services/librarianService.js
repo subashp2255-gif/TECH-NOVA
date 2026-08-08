@@ -384,80 +384,78 @@ export const librarianService = {
       }));
   },
 
-  // 4. READ-ONLY VERIFY TOKEN (ZERO MUTATION)
-  async verifyToken(tokenInput, libraryId = null, operatingDate = null) {
-    if (!tokenInput || !tokenInput.trim()) {
-      throw new Error('Please enter a valid QR token, booking code, or student ID.');
-    }
-    const cleanToken = tokenInput.trim();
-
-    try {
-      const { data, error } = await supabase.rpc('lookup_booking_by_qr', {
-        p_qr_token: cleanToken
-      });
-
-      if (!error && data) {
-        if (data.booking) {
-          return {
-            valid: Boolean(data.valid),
-            statusCode: (data.status_code || 'UNKNOWN').toUpperCase(),
-            message: data.message,
-            booking: {
-              id: data.booking.id,
-              bookingCode: data.booking.booking_code || data.booking.bookingCode,
-              seatNumber: data.booking.seat_number || data.booking.seatNumber,
-              studentName: data.booking.student_name || data.booking.studentName,
-              studentRegistrationNumber: data.booking.registration_number || data.booking.studentRegistrationNumber,
-              bookingDate: data.booking.booking_date || data.booking.bookingDate,
-              slotName: data.booking.slot_name || data.booking.slotName,
-              slotTime: data.booking.slot_time || data.booking.slotTime,
-              status: data.booking.status,
-              qrToken: data.booking.qr_token
-            }
-          };
-        }
-      }
-    } catch (err) {
-      if (err.message && (err.message.includes('open') || err.message.includes('expired') || err.message.includes('library'))) {
-        throw err;
-      }
-    }
-
-    const bookings = (await db.read('seatsync_bookings')) || [];
-    const matched = bookings.find(b =>
-      String(b.id) === cleanToken ||
-      cleanToken.includes(String(b.id)) ||
-      (b.booking_code && b.booking_code.toUpperCase() === cleanToken.toUpperCase()) ||
-      (b.bookingCode && b.bookingCode.toUpperCase() === cleanToken.toUpperCase()) ||
-      (b.qrToken && b.qrToken === cleanToken) ||
-      (b.studentCollegeId && b.studentCollegeId.toLowerCase() === cleanToken.toLowerCase())
-    );
-
-    if (!matched) {
-      throw new Error('Booking record not found. Confirm the booking reference or ask the student to refresh their latest QR pass.');
-    }
-
-    return {
-      valid: true,
-      statusCode: 'BOOKING_FOUND_READY',
-      booking: matched
-    };
-  },
-
-  // MANUAL LOOKUP RPC
-  async lookupBookingForManualCheckIn(identifier) {
+  // 4. LOOKUP BOOKING BY ID OR CODE (SUPABASE RPC)
+  async lookupBookingById(identifier, libraryId = null) {
     if (!identifier || !identifier.trim()) {
-      return { success: false, message: 'Please enter a search identifier.', matches: [] };
+      return { success: false, message: 'Please enter a Booking ID or code.', is_eligible: false };
     }
 
     try {
-      const { data, error } = await supabase.rpc('lookup_booking_for_manual_checkin', {
-        p_identifier: identifier.trim()
+      const { data, error } = await supabase.rpc('lookup_booking_by_identifier', {
+        p_identifier: identifier.trim(),
+        p_librarian_library_id: libraryId && isUUID(libraryId) ? libraryId : null
       });
 
       if (!error && data) {
         return {
           success: Boolean(data.success),
+          statusCode: data.status_code || 'UNKNOWN',
+          message: data.message || '',
+          isEligible: Boolean(data.is_eligible),
+          eligibilityCode: data.eligibility_code,
+          eligibilityMessage: data.eligibility_message,
+          booking: data.booking ? {
+            id: data.booking.id,
+            bookingCode: data.booking.booking_code,
+            studentId: data.booking.student_id,
+            studentName: data.booking.student_name,
+            studentRegistrationNumber: data.booking.registration_number,
+            department: data.booking.department,
+            avatarUrl: data.booking.avatar_url,
+            seatId: data.booking.seat_id,
+            seatNumber: data.booking.seat_number,
+            roomName: data.booking.room_name,
+            floorName: data.booking.floor_name,
+            libraryName: data.booking.library_name,
+            libraryId: data.booking.library_id,
+            slotName: data.booking.slot_name,
+            slotTime: data.booking.slot_time,
+            startTime: data.booking.start_time,
+            endTime: data.booking.end_time,
+            bookingDate: data.booking.booking_date,
+            status: data.booking.status,
+            checkedInAt: data.booking.checked_in_at
+          } : null
+        };
+      }
+    } catch (err) {
+      console.warn('[librarianService] lookupBookingById error:', err.message);
+    }
+
+    return {
+      success: false,
+      statusCode: 'BOOKING_NOT_FOUND',
+      message: 'Booking not found',
+      isEligible: false
+    };
+  },
+
+  // 4B. LOOKUP BOOKINGS BY REGISTER NUMBER / COLLEGE ID (SUPABASE RPC)
+  async lookupBookingsByRegisterNumber(registerNumber, libraryId = null) {
+    if (!registerNumber || !registerNumber.trim()) {
+      return { success: false, statusCode: 'MISSING_REGISTER_NUMBER', message: 'Please enter a student register number.', matches: [] };
+    }
+
+    try {
+      const { data, error } = await supabase.rpc('lookup_bookings_by_register_number', {
+        p_register_number: registerNumber.trim(),
+        p_librarian_library_id: libraryId && isUUID(libraryId) ? libraryId : null
+      });
+
+      if (!error && data) {
+        return {
+          success: Boolean(data.success),
+          statusCode: data.status_code || 'UNKNOWN',
           message: data.message || '',
           matches: (data.matches || []).map(m => ({
             id: m.id,
@@ -465,57 +463,40 @@ export const librarianService = {
             studentId: m.student_id,
             studentName: m.student_name,
             studentRegistrationNumber: m.registration_number,
-            studentEmail: m.email,
+            department: m.department,
+            avatarUrl: m.avatar_url,
             seatId: m.seat_id,
             seatNumber: m.seat_number,
             roomName: m.room_name,
             floorName: m.floor_name,
             libraryName: m.library_name,
+            libraryId: m.library_id,
             slotName: m.slot_name,
             slotTime: m.slot_time,
+            startTime: m.start_time,
+            endTime: m.end_time,
             bookingDate: m.booking_date,
             status: m.status,
             checkedInAt: m.checked_in_at,
-            checkedOutAt: m.checked_out_at,
+            isEligible: Boolean(m.is_eligible),
             eligibilityCode: m.eligibility_code,
             eligibilityMessage: m.eligibility_message
           }))
         };
       }
     } catch (err) {
-      console.warn('[librarianService] lookupBookingForManualCheckIn error:', err.message);
+      console.warn('[librarianService] lookupBookingsByRegisterNumber error:', err.message);
     }
 
-    // Local fallback search
-    const localBookings = (await db.read('seatsync_bookings')) || [];
-    const clean = identifier.trim().toLowerCase();
-    const matched = localBookings.filter(b =>
-      (b.booking_code && b.booking_code.toLowerCase().includes(clean)) ||
-      (b.bookingCode && b.bookingCode.toLowerCase().includes(clean)) ||
-      (b.studentRegistrationNumber && b.studentRegistrationNumber.toLowerCase().includes(clean)) ||
-      (b.studentCollegeId && b.studentCollegeId.toLowerCase().includes(clean)) ||
-      (b.studentEmail && b.studentEmail.toLowerCase().includes(clean))
-    );
-
     return {
-      success: matched.length > 0,
-      message: matched.length > 0 ? 'Matching reservations found.' : 'No booking record found.',
-      matches: matched.map(b => ({
-        id: b.id,
-        bookingCode: b.booking_code || b.bookingCode || b.id,
-        studentName: b.studentName || 'Student',
-        studentRegistrationNumber: b.studentRegistrationNumber || b.studentCollegeId || 'N/A',
-        seatNumber: b.seatNumber || 'S-01',
-        slotName: b.slotName || 'Time Slot',
-        bookingDate: b.bookingDate || getTodayKolkataDate(),
-        status: b.status || 'confirmed',
-        eligibilityCode: 'ELIGIBLE',
-        eligibilityMessage: 'Ready for check-in.'
-      }))
+      success: false,
+      statusCode: 'STUDENT_NOT_FOUND',
+      message: 'Student register number not found',
+      matches: []
     };
   },
 
-  // 4. SECURE ENTRY QR SCANNING ENGINE (RPC)
+  // 4C. SECURE ENTRY QR SCANNING & LOOKUP ENGINE
   async scanEntryQr(scannedValue, libraryId = null) {
     const { parseEntryQrPayload } = await import('../utils/qrPayload.js');
     let token = null;
@@ -530,44 +511,63 @@ export const librarianService = {
           ? 'Unsupported QR Pass version.'
           : err.message === 'MISSING_QR_TOKEN'
           ? 'Missing QR token.'
-          : 'Invalid QR code format. Please scan a valid SeatSync Entry Pass.'
+          : 'QR code is invalid or does not contain a booking reference'
       };
     }
 
-    const scanNonce = isUUID(crypto?.randomUUID?.()) ? crypto.randomUUID() : null;
+    const lookupRes = await this.lookupBookingById(token, libraryId);
+    if (!lookupRes.success || !lookupRes.booking) {
+      return {
+        valid: false,
+        statusCode: lookupRes.statusCode || 'BOOKING_NOT_FOUND',
+        message: lookupRes.message || 'Booking not found'
+      };
+    }
+
+    return {
+      valid: lookupRes.isEligible,
+      statusCode: lookupRes.eligibilityCode || 'SUCCESS',
+      message: lookupRes.eligibilityMessage || 'Booking pass found.',
+      booking: lookupRes.booking,
+      scannedPayload: scannedValue
+    };
+  },
+
+  // 5. SECURE ATOMIC CHECK-IN RPC
+  async checkInBooking({ bookingId, method = 'manual', scannedPayload = null }) {
+    if (!bookingId || !isUUID(bookingId)) {
+      return { success: false, statusCode: 'INVALID_BOOKING_ID', message: 'Valid booking ID required.' };
+    }
 
     try {
-      const { data, error } = await supabase.rpc('check_in_booking_by_qr', {
-        p_qr_token: token,
-        p_scan_nonce: scanNonce
+      const { data, error } = await supabase.rpc('check_in_booking', {
+        p_booking_id: bookingId,
+        p_method: method,
+        p_scanned_payload: scannedPayload
       });
 
       if (error) {
-        console.error('[librarianService] QR check-in RPC failed:', {
-          code: error.code,
-          message: error.message,
-          details: error.details,
-          hint: error.hint
-        });
+        console.error('[librarianService] check_in_booking RPC error:', error);
         return {
-          valid: false,
-          statusCode: 'DATABASE_OR_PERMISSION_ERROR',
-          message: `Database or permission error (${error.code || 'RLS'}).`
+          success: false,
+          statusCode: 'DATABASE_ERROR',
+          message: `Database verification failed (${error.message || 'RPC Error'}).`
         };
       }
 
       if (data) {
         return {
-          valid: Boolean(data.success),
+          success: Boolean(data.success),
           alreadyCheckedIn: Boolean(data.already_checked_in),
           statusCode: (data.status_code || 'UNKNOWN').toUpperCase(),
-          message: data.message || 'Scan completed.',
+          message: data.message || 'Check-in processed.',
           booking: data.booking ? {
             id: data.booking.id,
             bookingCode: data.booking.booking_code,
             studentId: data.booking.student_id,
             studentName: data.booking.student_name,
             studentRegistrationNumber: data.booking.registration_number,
+            department: data.booking.department,
             seatNumber: data.booking.seat_number,
             floorName: data.booking.floor_name,
             roomName: data.booking.room_name,
@@ -581,89 +581,19 @@ export const librarianService = {
         };
       }
     } catch (err) {
-      console.error('[librarianService] scanEntryQr exception:', err);
+      console.error('[librarianService] checkInBooking exception:', err);
       return {
-        valid: false,
-        statusCode: 'DATABASE_OR_PERMISSION_ERROR',
-        message: err.message || 'An unexpected scan error occurred.'
+        success: false,
+        statusCode: 'DATABASE_ERROR',
+        message: err.message || 'Database verification failed'
       };
     }
 
-    return {
-      valid: false,
-      statusCode: 'BOOKING_NOT_FOUND',
-      message: 'No booking matches this QR token.'
-    };
+    return { success: false, statusCode: 'CHECKIN_FAILED', message: 'Check-in failed.' };
   },
 
-  // 5. ATOMIC MANUAL CHECK-IN RPC
-  async checkInBookingManually({ bookingId, overrideReason = null }) {
-    if (isUUID(bookingId)) {
-      try {
-        const { data, error } = await supabase.rpc('check_in_booking_manually', {
-          p_booking_id: bookingId,
-          p_override_reason: overrideReason
-        });
-
-        if (error) {
-          console.error('[librarianService] Manual check-in RPC error:', error);
-          throw new Error(`Check-in failed: ${error.message}`);
-        }
-
-        if (data) {
-          if (!data.success && !data.already_checked_in) {
-            return {
-              success: false,
-              statusCode: (data.status_code || 'CHECKIN_FAILED').toUpperCase(),
-              message: data.message || 'Manual check-in failed.'
-            };
-          }
-          const b = data.booking || {};
-          return {
-            success: true,
-            alreadyCheckedIn: Boolean(data.already_checked_in),
-            statusCode: (data.status_code || 'SUCCESS').toUpperCase(),
-            message: data.message || 'Check-in confirmed.',
-            booking: {
-              id: b.id || bookingId,
-              bookingCode: b.booking_code,
-              studentId: b.student_id,
-              studentName: b.student_name,
-              studentRegistrationNumber: b.registration_number,
-              seatNumber: b.seat_number,
-              floorName: b.floor_name,
-              roomName: b.room_name,
-              libraryName: b.library_name,
-              slotName: b.slot_name,
-              slotTime: b.slot_time,
-              bookingDate: b.booking_date,
-              status: 'checked_in',
-              checkedInAt: b.checked_in_at
-            }
-          };
-        }
-      } catch (err) {
-        console.warn('[librarianService] checkInBookingManually error:', err.message);
-        throw err;
-      }
-    }
-
-    const bookings = (await db.read('seatsync_bookings')) || [];
-    const target = bookings.find(b => String(b.id) === String(bookingId));
-    if (!target) throw new Error('Booking record not found.');
-
-    target.status = 'checked_in';
-    target.checkedInAt = new Date().toISOString();
-    await db.write('seatsync_bookings', bookings);
-    return { success: true, statusCode: 'SUCCESS', message: 'Check-in Successful', booking: target };
-  },
-
-  async checkInBooking({ bookingId, method = 'manual', qrToken = null, scanNonce = null, overrideReason = null }) {
-    return this.checkInBookingManually({ bookingId, overrideReason });
-  },
-
-  async processCheckIn(bookingId, staffUser, reason = 'Entry Verified') {
-    return this.checkInBooking({ bookingId, method: 'manual', overrideReason: reason });
+  async processCheckIn(bookingId, staffUser, method = 'manual') {
+    return this.checkInBooking({ bookingId, method });
   },
 
   // 6. ATOMIC CHECK-OUT RPC

@@ -1,7 +1,6 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useAuth } from '../../auth/AuthProvider';
-import { db } from '../../services/mockDatabase';
 import { librarianService } from '../../services/librarianService';
 import { Card, CardContent } from '../../components/shared/Card';
 import { Button } from '../../components/shared/Button';
@@ -10,7 +9,8 @@ import { Badge } from '../../components/shared/Badge';
 import {
   QrCode, CheckCircle2, AlertTriangle, Search, LogOut, LogIn,
   Camera, CameraOff, RefreshCw, X, ShieldCheck, Clock, MapPin,
-  ChevronDown, ChevronUp, User, Sparkles, Filter, Lock, Check
+  ChevronDown, ChevronUp, User, Sparkles, Filter, Lock, Check,
+  UserCheck, Layers, Calendar, ArrowRight
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 
@@ -37,11 +37,19 @@ export default function QRScannerPage() {
   // Verification Mode: 'entry' | 'checkout' | 'manual'
   const [activeMode, setActiveMode] = useState('entry');
   
-  // Manual Input Mode: 'register' | 'booking' | 'token'
+  // Manual Input Mode: 'register' | 'booking' (Token tab completely removed)
   const [manualInputMode, setManualInputMode] = useState('register');
-  const [tokenInput, setTokenInput] = useState('');
+  const [manualInput, setManualInput] = useState('');
   
   const [loading, setLoading] = useState(false);
+  
+  // Selection state for multiple candidate bookings
+  const [candidateBookings, setCandidateBookings] = useState([]);
+  
+  // Booking preview target state before check-in confirmation
+  const [previewBooking, setPreviewBooking] = useState(null);
+  
+  // Final execution result state
   const [scanResult, setScanResult] = useState(null);
   
   // WebRTC Camera State
@@ -53,7 +61,6 @@ export default function QRScannerPage() {
   
   const videoRef = useRef(null);
   const mediaStreamRef = useRef(null);
-  const cooldownRef = useRef(false);
   const isProcessingRef = useRef(false);
   const lastScannedTokenRef = useRef('');
 
@@ -130,7 +137,7 @@ export default function QRScannerPage() {
                 isProcessingRef.current = true;
                 lastScannedTokenRef.current = rawVal;
                 stopCameraStream();
-                handleVerifyToken(rawVal);
+                handleQrScanDetected(rawVal);
               }
             }
           } catch { /* proceed */ }
@@ -157,13 +164,12 @@ export default function QRScannerPage() {
       if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
         setCameraError('unavailable');
         setIsCameraActive(false);
-        toast.error('Camera API not supported on this browser context.');
+        toast.error('Unable to access the camera');
         return;
       }
 
       let stream;
       try {
-        // Try ideal facingMode first
         stream = await navigator.mediaDevices.getUserMedia({
           video: {
             facingMode: { ideal: facingMode },
@@ -172,31 +178,28 @@ export default function QRScannerPage() {
           }
         });
       } catch {
-        // Fallback for desktop webcams without facingMode attribute
-        stream = await navigator.mediaDevices.getUserMedia({
-          video: true
-        });
+        stream = await navigator.mediaDevices.getUserMedia({ video: true });
       }
 
       mediaStreamRef.current = stream;
       setMediaStream(stream);
       setIsCameraActive(true);
-      toast.success('Camera scanner active. Position student QR pass inside the frame.');
+      toast.success('Camera scanner active. Position student QR pass inside frame.');
     } catch (err) {
       console.warn('Camera access error:', err);
       setIsCameraActive(false);
       if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
         setCameraError('permission_denied');
-        toast.error('Camera access was denied by browser permission settings.');
+        toast.error('Camera permission was denied');
       } else if (err.name === 'NotFoundError' || err.name === 'DevicesNotFoundError') {
         setCameraError('unavailable');
-        toast.error('No camera hardware detected on this device.');
+        toast.error('Unable to access the camera');
       } else if (err.name === 'NotReadableError' || err.name === 'TrackStartError') {
         setCameraError('in_use');
         toast.error('Camera is currently being used by another application.');
       } else {
         setCameraError('unavailable');
-        toast.error('Failed to initialize camera stream.');
+        toast.error('Unable to access the camera');
       }
     }
   };
@@ -232,95 +235,247 @@ export default function QRScannerPage() {
     }, 200);
   };
 
-  const handleVerifyToken = async (inputVal, modeOverride = null) => {
-    const targetToken = (inputVal || tokenInput || '').trim();
-    if (!targetToken) {
-      toast.error('Please enter or scan a valid QR token, Register ID, or Booking Code.');
-      isProcessingRef.current = false;
-      return;
-    }
-
+  // QR SCAN DETECTED HANDLER
+  const handleQrScanDetected = async (rawQrValue) => {
     setLoading(true);
     setScanningStatus('verifying');
     setScanResult(null);
+    setPreviewBooking(null);
+    setCandidateBookings([]);
 
     const nowTimeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
     try {
-      const res = await librarianService.scanEntryQr(targetToken, staffUser?.library_id);
+      const res = await librarianService.scanEntryQr(rawQrValue, staffUser?.library_id);
 
-      const structuredResult = {
-        valid: res.valid,
-        alreadyCheckedIn: res.alreadyCheckedIn,
-        statusCode: res.statusCode,
-        message: res.message,
-        booking: res.booking,
-        verifiedAt: nowTimeStr,
-        token: targetToken
-      };
-
-      setScanResult(structuredResult);
-      setScanningStatus('idle');
-
-      const activityItem = {
-        id: `scan-${Date.now()}`,
-        timeStr: nowTimeStr,
-        reference: res.booking?.bookingCode || res.booking?.studentRegistrationNumber || targetToken,
-        studentName: res.booking?.studentName || 'Student',
-        action: 'Entry Check-In',
-        seatNumber: res.booking?.seatNumber || 'N/A',
-        result: res.valid ? 'Verified Check-In' : (res.statusCode || 'Failed'),
-        statusClass: res.valid
-          ? 'bg-emerald-100 text-emerald-800 border-emerald-300'
-          : ['TOO_EARLY', 'WRONG_DATE'].includes(res.statusCode)
-          ? 'bg-amber-100 text-amber-800 border-amber-300'
-          : 'bg-rose-100 text-rose-800 border-rose-300'
-      };
-
-      setRecentVerifications(prev => [activityItem, ...prev.slice(0, 9)]);
-
-      if (res.valid) {
-        toast.success(res.message || 'Check-in Successful');
-      } else {
-        toast.error(res.message || 'Verification Failed');
+      if (!res.valid) {
+        setScanResult({
+          valid: false,
+          statusCode: res.statusCode || 'INVALID_QR',
+          message: res.message || 'QR code is invalid or does not contain a booking reference',
+          verifiedAt: nowTimeStr
+        });
+        toast.error(res.message || 'QR code is invalid or does not contain a booking reference');
+        return;
       }
+
+      // Show preview for QR check-in
+      setPreviewBooking({
+        ...res.booking,
+        checkInMethod: 'qr',
+        scannedPayload: rawQrValue
+      });
+      toast.success('Eligible booking found for QR scan. Confirm check-in below.');
     } catch (err) {
-      console.warn('Verify token error:', err);
-      toast.error(err.message || 'Error processing scan request');
+      console.warn('QR scan processing error:', err);
       setScanResult({
         valid: false,
         statusCode: 'DATABASE_ERROR',
-        message: err.message || 'Failed to process scan request.',
+        message: err.message || 'Database verification failed',
         verifiedAt: nowTimeStr
       });
+      toast.error(err.message || 'Database verification failed');
+    } finally {
+      setLoading(false);
       setScanningStatus('idle');
-    } finally {
-      setLoading(false);
     }
   };
 
-  const handleManualSubmit = (e) => {
+  // MANUAL LOOKUP SUBMIT HANDLER
+  const handleManualLookupSubmit = async (e) => {
     if (e) e.preventDefault();
-    handleVerifyToken(tokenInput);
-  };
+    const trimmedInput = (manualInput || '').trim();
 
-  const handleConfirmEntry = async (booking) => {
+    if (!trimmedInput) {
+      toast.error('Please enter a search identifier.');
+      return;
+    }
+
     setLoading(true);
+    setScanResult(null);
+    setPreviewBooking(null);
+    setCandidateBookings([]);
+
+    const nowTimeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
     try {
-      await librarianService.processCheckIn(booking.id, staffUser || { name: 'Staff Librarian' }, 'Verified Entry QR');
-      toast.success(`Entry verified for ${booking.studentName}! Seat ${booking.seatNumber} marked checked-in.`);
-      handleScanNextStudent();
+      if (manualInputMode === 'booking') {
+        // 1. Manual Lookup by Booking ID
+        const res = await librarianService.lookupBookingById(trimmedInput, staffUser?.library_id);
+
+        if (!res.success || !res.booking) {
+          setScanResult({
+            valid: false,
+            statusCode: res.statusCode || 'BOOKING_NOT_FOUND',
+            message: res.message || 'Booking not found',
+            verifiedAt: nowTimeStr
+          });
+          toast.error(res.message || 'Booking not found');
+          return;
+        }
+
+        if (!res.isEligible) {
+          setScanResult({
+            valid: false,
+            statusCode: res.eligibilityCode || 'NOT_ELIGIBLE',
+            message: res.eligibilityMessage || 'Booking is not eligible for check-in.',
+            booking: res.booking,
+            verifiedAt: nowTimeStr
+          });
+          toast.error(res.eligibilityMessage || 'Booking is not eligible for check-in.');
+          return;
+        }
+
+        // Single eligible booking found -> Show Confirmation Preview
+        setPreviewBooking({
+          ...res.booking,
+          checkInMethod: 'booking_id'
+        });
+        toast.success('Booking reference found. Review details and confirm check-in.');
+
+      } else {
+        // 2. Manual Lookup by Register Number / College ID
+        const res = await librarianService.lookupBookingsByRegisterNumber(trimmedInput, staffUser?.library_id);
+
+        if (!res.success && res.statusCode === 'STUDENT_NOT_FOUND') {
+          setScanResult({
+            valid: false,
+            statusCode: 'STUDENT_NOT_FOUND',
+            message: 'Student register number not found',
+            verifiedAt: nowTimeStr
+          });
+          toast.error('Student register number not found');
+          return;
+        }
+
+        const matches = res.matches || [];
+        if (matches.length === 0) {
+          setScanResult({
+            valid: false,
+            statusCode: 'NO_ELIGIBLE_BOOKING',
+            message: 'No eligible booking found for this student.',
+            verifiedAt: nowTimeStr
+          });
+          toast.error('No eligible booking found for this student.');
+          return;
+        }
+
+        const eligibleMatches = matches.filter(m => m.isEligible);
+
+        if (eligibleMatches.length === 0) {
+          const first = matches[0];
+          setScanResult({
+            valid: false,
+            statusCode: first.eligibilityCode || 'NO_ELIGIBLE_BOOKING',
+            message: first.eligibilityMessage || 'No eligible booking found for this student.',
+            booking: first,
+            verifiedAt: nowTimeStr
+          });
+          toast.error(first.eligibilityMessage || 'No eligible booking found for this student.');
+          return;
+        }
+
+        if (eligibleMatches.length === 1) {
+          // Exactly 1 eligible booking -> Show Confirmation Preview
+          setPreviewBooking({
+            ...eligibleMatches[0],
+            checkInMethod: 'register_id'
+          });
+          toast.success('Student booking found. Review details and confirm check-in.');
+        } else {
+          // Multiple eligible bookings -> Show Selection List
+          setCandidateBookings(eligibleMatches);
+          toast('Multiple bookings found—select the correct booking', { icon: 'ℹ️' });
+        }
+      }
     } catch (err) {
-      toast.error(err.message || 'Failed to complete entry check-in.');
+      console.warn('Manual lookup error:', err);
+      setScanResult({
+        valid: false,
+        statusCode: 'DATABASE_ERROR',
+        message: err.message || 'Database verification failed',
+        verifiedAt: nowTimeStr
+      });
+      toast.error('Database verification failed');
     } finally {
       setLoading(false);
     }
   };
 
+  // CONFIRM CHECK-IN ACTION (ATOMIC DB RPC CALL)
+  const handleConfirmCheckIn = async (bookingToConfirm) => {
+    if (!bookingToConfirm || !bookingToConfirm.id) return;
+    setLoading(true);
+
+    const nowTimeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const method = bookingToConfirm.checkInMethod || (activeMode === 'entry' ? 'qr' : manualInputMode);
+
+    try {
+      const res = await librarianService.checkInBooking({
+        bookingId: bookingToConfirm.id,
+        method: method,
+        scannedPayload: bookingToConfirm.scannedPayload || null
+      });
+
+      if (!res.success && !res.alreadyCheckedIn) {
+        setScanResult({
+          valid: false,
+          statusCode: res.statusCode || 'CHECKIN_FAILED',
+          message: res.message || 'Check-in failed.',
+          verifiedAt: nowTimeStr
+        });
+        toast.error(res.message || 'Check-in failed.');
+        return;
+      }
+
+      const verifiedBooking = res.booking || bookingToConfirm;
+      const structuredResult = {
+        valid: true,
+        alreadyCheckedIn: res.alreadyCheckedIn,
+        statusCode: res.alreadyCheckedIn ? 'ALREADY_CHECKED_IN' : 'SUCCESS',
+        message: res.message || `Entry verified for ${verifiedBooking.studentName}! Seat ${verifiedBooking.seatNumber} marked checked-in.`,
+        booking: verifiedBooking,
+        verifiedAt: nowTimeStr,
+        method: method
+      };
+
+      setScanResult(structuredResult);
+      setPreviewBooking(null);
+      setCandidateBookings([]);
+
+      // Append to Recent Verifications Activity Feed
+      const activityItem = {
+        id: `scan-${Date.now()}`,
+        timeStr: nowTimeStr,
+        reference: verifiedBooking.bookingCode || verifiedBooking.studentRegistrationNumber || verifiedBooking.id,
+        studentName: verifiedBooking.studentName || 'Student',
+        action: 'Entry Check-In',
+        seatNumber: verifiedBooking.seatNumber || 'N/A',
+        result: res.alreadyCheckedIn ? 'Already Checked In' : 'Verified Check-In',
+        statusClass: 'bg-emerald-100 text-emerald-800 border-emerald-300'
+      };
+
+      setRecentVerifications(prev => [activityItem, ...prev.slice(0, 9)]);
+      toast.success(structuredResult.message);
+    } catch (err) {
+      console.warn('Confirm check-in error:', err);
+      toast.error(err.message || 'Database verification failed');
+      setScanResult({
+        valid: false,
+        statusCode: 'DATABASE_ERROR',
+        message: err.message || 'Database verification failed',
+        verifiedAt: nowTimeStr
+      });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // CONFIRM CHECKOUT ACTION
   const handleConfirmCheckout = async (booking) => {
     setLoading(true);
     try {
-      await librarianService.processCheckOut(booking.id, staffUser || { name: 'Staff Librarian' });
+      await librarianService.checkOutBooking({ bookingId: booking.id, method: 'manual' });
       toast.success(`Checkout completed for ${booking.studentName}! Seat ${booking.seatNumber} released.`);
       handleScanNextStudent();
     } catch (err) {
@@ -331,26 +486,29 @@ export default function QRScannerPage() {
   };
 
   const handleScanNextStudent = () => {
-    setTokenInput('');
+    setManualInput('');
     setScanResult(null);
+    setPreviewBooking(null);
+    setCandidateBookings([]);
     setScanningStatus('idle');
     lastScannedTokenRef.current = '';
     isProcessingRef.current = false;
-    startCameraStream();
+    if (activeMode === 'entry') {
+      startCameraStream();
+    }
   };
 
   const filteredVerifications = useMemo(() => {
     if (activityFilter === 'ALL') return recentVerifications;
-    if (activityFilter === 'ENTRY') return recentVerifications.filter(v => v.action === 'Entry' && v.result === 'Verified');
-    if (activityFilter === 'CHECKOUT') return recentVerifications.filter(v => v.action === 'Checkout' && v.result === 'Verified');
+    if (activityFilter === 'ENTRY') return recentVerifications.filter(v => v.action.includes('Entry') && v.result.includes('Verified'));
+    if (activityFilter === 'CHECKOUT') return recentVerifications.filter(v => v.action.includes('Checkout') && v.result.includes('Verified'));
     if (activityFilter === 'FAILED') return recentVerifications.filter(v => v.result.includes('Failed') || v.result.includes('Expired'));
     return recentVerifications;
   }, [recentVerifications, activityFilter]);
 
   const placeholderText = useMemo(() => {
     if (manualInputMode === 'register') return 'Enter student register number (e.g. 24AD042)...';
-    if (manualInputMode === 'booking') return 'Enter booking code (e.g. BK-1785)...';
-    return 'Paste verification token...';
+    return 'Enter booking code or UUID (e.g. BK-1785)...';
   }, [manualInputMode]);
 
   return (
@@ -368,7 +526,7 @@ export default function QRScannerPage() {
                 QR Pass Scanner & Entry Verification
               </h1>
               <p className="text-xs sm:text-sm text-slate-500 font-medium mt-0.5">
-                Verify entry passes, checkout tokens and student registration IDs securely.
+                Verify student entry passes, check-ins, and registration IDs securely via Supabase.
               </p>
             </div>
           </div>
@@ -391,7 +549,7 @@ export default function QRScannerPage() {
       <div className="bg-slate-200/80 p-1.5 rounded-2xl max-w-xl flex gap-1 shadow-inner">
         <button
           type="button"
-          onClick={() => setActiveMode('entry')}
+          onClick={() => { setActiveMode('entry'); setPreviewBooking(null); setCandidateBookings([]); setScanResult(null); }}
           className={`
             flex-1 h-10 rounded-xl text-xs font-extrabold transition-all flex items-center justify-center gap-2
             ${activeMode === 'entry'
@@ -406,7 +564,7 @@ export default function QRScannerPage() {
 
         <button
           type="button"
-          onClick={() => setActiveMode('checkout')}
+          onClick={() => { setActiveMode('checkout'); setPreviewBooking(null); setCandidateBookings([]); setScanResult(null); }}
           className={`
             flex-1 h-10 rounded-xl text-xs font-extrabold transition-all flex items-center justify-center gap-2
             ${activeMode === 'checkout'
@@ -421,7 +579,7 @@ export default function QRScannerPage() {
 
         <button
           type="button"
-          onClick={() => setActiveMode('manual')}
+          onClick={() => { setActiveMode('manual'); setPreviewBooking(null); setCandidateBookings([]); setScanResult(null); }}
           className={`
             flex-1 h-10 rounded-xl text-xs font-extrabold transition-all flex items-center justify-center gap-2
             ${activeMode === 'manual'
@@ -456,7 +614,7 @@ export default function QRScannerPage() {
                   type="button"
                   onClick={switchCameraFacing}
                   variant="outline"
-                  className="h-8 text-[11px] font-bold rounded-xl border-slate-300 text-slate-600"
+                  className="h-9 text-[11px] font-bold rounded-xl border-slate-300 text-slate-600 min-h-[44px]"
                 >
                   <RefreshCw size={12} className="mr-1" /> Switch Cam
                 </Button>
@@ -465,7 +623,7 @@ export default function QRScannerPage() {
               <Button
                 type="button"
                 onClick={toggleCamera}
-                className={`h-8 px-3.5 text-xs font-extrabold rounded-xl transition-all shadow-xs ${
+                className={`h-11 px-4 text-xs font-extrabold rounded-xl transition-all shadow-xs min-h-[44px] ${
                   isCameraActive
                     ? 'bg-rose-600 hover:bg-rose-700 text-white'
                     : 'bg-teal-600 hover:bg-teal-700 text-white'
@@ -526,11 +684,11 @@ export default function QRScannerPage() {
                     <div className="w-14 h-14 rounded-2xl bg-rose-500/10 text-rose-500 border border-rose-500/20 flex items-center justify-center mx-auto">
                       <Lock size={28} />
                     </div>
-                    <h3 className="text-sm font-extrabold text-white">Camera Access Denied</h3>
+                    <h3 className="text-sm font-extrabold text-white">Camera permission was denied</h3>
                     <p className="text-xs text-slate-400 leading-relaxed font-medium">
                       Camera permission was denied in your browser settings. Enable camera access or use <strong>Manual Lookup</strong> on the right.
                     </p>
-                    <Button onClick={startCameraStream} className="bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs h-9 rounded-xl">
+                    <Button onClick={startCameraStream} className="bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs h-11 px-4 rounded-xl min-h-[44px]">
                       Allow Camera Access
                     </Button>
                   </div>
@@ -539,7 +697,7 @@ export default function QRScannerPage() {
                     <div className="w-14 h-14 rounded-2xl bg-amber-500/10 text-amber-500 border border-amber-500/20 flex items-center justify-center mx-auto">
                       <AlertTriangle size={28} />
                     </div>
-                    <h3 className="text-sm font-extrabold text-white">No Camera Detected</h3>
+                    <h3 className="text-sm font-extrabold text-white">Unable to access the camera</h3>
                     <p className="text-xs text-slate-400 leading-relaxed font-medium">
                       No supported webcam or camera hardware was detected. Use the Manual Lookup console on the right.
                     </p>
@@ -553,7 +711,7 @@ export default function QRScannerPage() {
                     <p className="text-xs text-slate-400 leading-relaxed font-medium">
                       The camera is being used by another application or browser tab. Close other apps and try again.
                     </p>
-                    <Button onClick={startCameraStream} className="bg-teal-600 hover:bg-teal-700 text-white font-bold text-xs h-9 rounded-xl">
+                    <Button onClick={startCameraStream} className="bg-teal-600 hover:bg-teal-700 text-white font-bold text-xs h-11 px-4 rounded-xl min-h-[44px]">
                       Retry Camera Stream
                     </Button>
                   </div>
@@ -566,7 +724,7 @@ export default function QRScannerPage() {
                     <p className="text-xs text-slate-400 leading-relaxed font-medium">
                       Position student mobile QR pass in front of the lens. Video feed is processed locally and securely.
                     </p>
-                    <Button onClick={startCameraStream} className="bg-teal-600 hover:bg-teal-700 text-white font-extrabold text-xs h-10 px-5 rounded-xl shadow-md">
+                    <Button onClick={startCameraStream} className="bg-teal-600 hover:bg-teal-700 text-white font-extrabold text-xs h-11 px-5 rounded-xl shadow-md min-h-[44px]">
                       <Camera size={16} className="mr-1.5 inline" /> Start Camera Scanner
                     </Button>
                   </div>
@@ -587,56 +745,47 @@ export default function QRScannerPage() {
             </p>
           </div>
 
-          {/* MANUAL INPUT MODE TABS */}
+          {/* MANUAL INPUT MODE TABS (Register / College ID & Booking ID only) */}
           <div className="flex gap-1.5 bg-slate-100 p-1 rounded-xl">
             <button
               type="button"
-              onClick={() => setManualInputMode('register')}
-              className={`flex-1 py-1.5 text-[11px] font-bold rounded-lg transition-all ${
+              onClick={() => { setManualInputMode('register'); setPreviewBooking(null); setCandidateBookings([]); setScanResult(null); }}
+              className={`flex-1 py-2 text-xs font-extrabold rounded-lg transition-all min-h-[44px] ${
                 manualInputMode === 'register' ? 'bg-white text-navy shadow-xs' : 'text-slate-500 hover:text-navy'
               }`}
             >
-              Register ID
+              Register / College ID
             </button>
             <button
               type="button"
-              onClick={() => setManualInputMode('booking')}
-              className={`flex-1 py-1.5 text-[11px] font-bold rounded-lg transition-all ${
+              onClick={() => { setManualInputMode('booking'); setPreviewBooking(null); setCandidateBookings([]); setScanResult(null); }}
+              className={`flex-1 py-2 text-xs font-extrabold rounded-lg transition-all min-h-[44px] ${
                 manualInputMode === 'booking' ? 'bg-white text-navy shadow-xs' : 'text-slate-500 hover:text-navy'
               }`}
             >
               Booking ID
             </button>
-            <button
-              type="button"
-              onClick={() => setManualInputMode('token')}
-              className={`flex-1 py-1.5 text-[11px] font-bold rounded-lg transition-all ${
-                manualInputMode === 'token' ? 'bg-white text-navy shadow-xs' : 'text-slate-500 hover:text-navy'
-              }`}
-            >
-              Token
-            </button>
           </div>
 
-          <form onSubmit={handleManualSubmit} className="space-y-4">
+          <form onSubmit={handleManualLookupSubmit} className="space-y-4">
             <div className="space-y-1.5">
               <label className="text-[10px] font-extrabold text-slate-400 uppercase tracking-wider block">
-                {manualInputMode === 'register' ? 'Student Register / College ID' : manualInputMode === 'booking' ? 'Reservation Pass Code' : 'Verification Token String'}
+                {manualInputMode === 'register' ? 'Student Register / College ID' : 'Booking Code / Reservation ID'}
               </label>
               
               <div className="relative">
                 <Input
                   type="text"
                   placeholder={placeholderText}
-                  value={tokenInput}
-                  onChange={(e) => setTokenInput(e.target.value)}
-                  className="h-11 font-mono text-xs bg-slate-50 border-slate-300 text-navy pr-9 rounded-2xl focus:border-teal-600"
+                  value={manualInput}
+                  onChange={(e) => setManualInput(e.target.value)}
+                  className="h-11 font-mono text-xs bg-slate-50 border-slate-300 text-navy pr-9 rounded-2xl focus:border-teal-600 min-h-[44px]"
                 />
-                {tokenInput && (
+                {manualInput && (
                   <button
                     type="button"
-                    onClick={() => setTokenInput('')}
-                    className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+                    onClick={() => setManualInput('')}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 p-1"
                   >
                     <X size={14} />
                   </button>
@@ -646,47 +795,180 @@ export default function QRScannerPage() {
 
             <Button
               type="submit"
-              disabled={loading || !tokenInput.trim()}
-              className="w-full h-11 bg-brandBlue hover:bg-blue-700 text-white font-extrabold text-xs rounded-2xl shadow-sm flex items-center justify-center gap-2 disabled:opacity-50"
+              disabled={loading || !manualInput.trim()}
+              className="w-full h-11 bg-brandBlue hover:bg-blue-700 text-white font-extrabold text-xs rounded-2xl shadow-sm flex items-center justify-center gap-2 disabled:opacity-50 min-h-[44px]"
             >
               {loading ? (
                 <span className="flex items-center gap-2 font-mono">
-                  <RefreshCw size={14} className="animate-spin" /> Verifying securely...
+                  <RefreshCw size={14} className="animate-spin" /> Querying Supabase...
                 </span>
               ) : (
                 <>
-                  <ShieldCheck size={16} /> Verify Credentials →
+                  <Search size={16} /> Find Booking
                 </>
               )}
             </Button>
           </form>
-
-          {/* QUICK DEMO ASSISTANT CHIPS */}
-          <div className="pt-3 border-t border-slate-100 text-xs space-y-2">
-            <span className="text-[10px] font-extrabold text-slate-400 uppercase tracking-wider block">
-              Quick Test Input Shortcuts:
-            </span>
-            <div className="flex flex-wrap gap-1.5">
-              <button
-                type="button"
-                onClick={() => { setManualInputMode('register'); setTokenInput('24AD042'); }}
-                className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 font-mono text-[11px] rounded-lg border border-slate-200"
-              >
-                24AD042
-              </button>
-              <button
-                type="button"
-                onClick={() => { setManualInputMode('booking'); setTokenInput('BK-1785'); }}
-                className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 font-mono text-[11px] rounded-lg border border-slate-200"
-              >
-                BK-1785
-              </button>
-            </div>
-          </div>
         </Card>
       </div>
 
-      {/* 4. PROMINENT VERIFICATION RESULT PANEL */}
+      {/* 4. MULTIPLE BOOKINGS CANDIDATE SELECTION LIST */}
+      {candidateBookings && candidateBookings.length > 1 && (
+        <Card className="border-2 border-amber-300 bg-amber-50/50 rounded-3xl p-6 shadow-md space-y-4 animate-in fade-in duration-200">
+          <div className="flex items-center justify-between border-b border-amber-200 pb-3">
+            <div className="flex items-center gap-2.5">
+              <div className="w-9 h-9 rounded-xl bg-amber-500 text-white flex items-center justify-center font-bold shrink-0">
+                <Layers size={20} />
+              </div>
+              <div>
+                <h3 className="text-base font-black text-amber-950">Multiple Bookings Found</h3>
+                <p className="text-xs text-amber-900 font-medium">
+                  Select the correct booking to preview and confirm check-in.
+                </p>
+              </div>
+            </div>
+            <Badge className="bg-amber-600 text-white font-mono font-extrabold text-xs px-3 py-1 rounded-xl">
+              {candidateBookings.length} Eligible Bookings
+            </Badge>
+          </div>
+
+          <div className="grid gap-3">
+            {candidateBookings.map((b) => (
+              <div
+                key={b.id}
+                onClick={() => { setPreviewBooking({ ...b, checkInMethod: 'register_id' }); toast.success(`Selected Booking ${b.bookingCode || b.id}`); }}
+                className="p-4 bg-white hover:bg-blue-50/60 border border-amber-200 hover:border-brandBlue rounded-2xl transition-all cursor-pointer shadow-xs flex flex-wrap items-center justify-between gap-4 group"
+              >
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-xl bg-slate-100 text-navy flex items-center justify-center font-bold font-mono border border-slate-200 group-hover:bg-brandBlue group-hover:text-white transition-colors">
+                    {b.seatNumber || 'Seat'}
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <strong className="text-sm font-extrabold text-navy">{b.studentName}</strong>
+                      <span className="text-xs font-mono text-indigo-600 bg-indigo-50 px-2 py-0.5 rounded-md border border-indigo-100">
+                        {b.studentRegistrationNumber || b.registration_number || 'N/A'}
+                      </span>
+                    </div>
+                    <div className="text-xs text-slate-500 font-medium mt-0.5 flex flex-wrap items-center gap-2">
+                      <span>Ref: <strong>{b.bookingCode || b.id}</strong></span>
+                      <span>•</span>
+                      <span>{b.roomName || 'Reading Hall'} ({b.floorName || 'Ground Floor'})</span>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-4">
+                  <div className="text-right font-mono text-xs">
+                    <span className="text-slate-400 block text-[10px] uppercase font-extrabold">Slot Window</span>
+                    <strong className="text-navy">{b.slotTime || b.slotName}</strong>
+                  </div>
+                  <Button variant="outline" size="sm" className="h-9 px-3 text-xs font-extrabold rounded-xl border-brandBlue text-brandBlue group-hover:bg-brandBlue group-hover:text-white">
+                    Select <ArrowRight size={14} className="ml-1" />
+                  </Button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </Card>
+      )}
+
+      {/* 5. BOOKING CONFIRMATION PREVIEW CARD */}
+      {previewBooking && (
+        <motion.div
+          initial={{ opacity: 0, y: 12 }}
+          animate={{ opacity: 1, y: 0 }}
+          exit={{ opacity: 0, y: -12 }}
+          transition={{ duration: 0.25 }}
+        >
+          <Card className="border-2 border-indigo-300 bg-gradient-to-r from-indigo-50/60 via-white to-blue-50/40 rounded-3xl p-6 shadow-lg space-y-5">
+            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-indigo-100 pb-3">
+              <div className="flex items-center gap-3">
+                <div className="w-11 h-11 rounded-2xl bg-indigo-600 text-white flex items-center justify-center font-bold text-lg shadow-md shrink-0">
+                  {previewBooking.avatarUrl ? (
+                    <img src={previewBooking.avatarUrl} alt="Student Avatar" className="w-full h-full rounded-2xl object-cover" />
+                  ) : (
+                    previewBooking.studentName ? previewBooking.studentName.charAt(0).toUpperCase() : 'S'
+                  )}
+                </div>
+                <div>
+                  <span className="text-[10px] font-extrabold text-indigo-600 uppercase tracking-wider block">Booking Confirmation Preview</span>
+                  <h3 className="text-lg font-black text-navy">{previewBooking.studentName}</h3>
+                </div>
+              </div>
+
+              <Badge className="bg-emerald-600 text-white font-mono font-extrabold text-xs px-3.5 py-1 rounded-xl flex items-center gap-1">
+                <ShieldCheck size={14} /> READY FOR CHECK-IN
+              </Badge>
+            </div>
+
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 bg-white p-4 rounded-2xl border border-indigo-100 shadow-2xs text-xs font-mono">
+              <div>
+                <span className="text-slate-400 text-[10px] block uppercase font-extrabold">Register / College ID</span>
+                <strong className="text-indigo-600 font-bold text-sm">{previewBooking.studentRegistrationNumber || previewBooking.registration_number || 'N/A'}</strong>
+              </div>
+              <div>
+                <span className="text-slate-400 text-[10px] block uppercase font-extrabold">Department</span>
+                <strong className="text-navy font-bold">{previewBooking.department || 'N/A'}</strong>
+              </div>
+              <div>
+                <span className="text-slate-400 text-[10px] block uppercase font-extrabold">Booking Code</span>
+                <strong className="text-teal-600 font-bold">{previewBooking.bookingCode || previewBooking.id}</strong>
+              </div>
+              <div>
+                <span className="text-slate-400 text-[10px] block uppercase font-extrabold">Assigned Seat</span>
+                <strong className="text-teal-600 font-black text-base">{previewBooking.seatNumber || 'S-01'}</strong>
+              </div>
+
+              <div>
+                <span className="text-slate-400 text-[10px] block uppercase font-extrabold">Library</span>
+                <strong className="text-navy font-bold">{previewBooking.libraryName || 'Central Library'}</strong>
+              </div>
+              <div>
+                <span className="text-slate-400 text-[10px] block uppercase font-extrabold">Room / Floor</span>
+                <strong className="text-slate-800">{previewBooking.roomName || 'Reading Hall'} ({previewBooking.floorName || 'Ground'})</strong>
+              </div>
+              <div>
+                <span className="text-slate-400 text-[10px] block uppercase font-extrabold">Booking Date</span>
+                <strong className="text-slate-800">{previewBooking.bookingDate || 'Today'}</strong>
+              </div>
+              <div>
+                <span className="text-slate-400 text-[10px] block uppercase font-extrabold">Slot Window</span>
+                <strong className="text-slate-800">{previewBooking.slotTime || previewBooking.slotName}</strong>
+              </div>
+            </div>
+
+            <div className="flex flex-wrap items-center justify-end gap-3 pt-2 border-t border-indigo-100">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => setPreviewBooking(null)}
+                className="h-11 px-5 text-xs font-bold rounded-2xl border-slate-300 text-slate-700 min-h-[44px]"
+              >
+                Cancel
+              </Button>
+              <Button
+                type="button"
+                disabled={loading}
+                onClick={() => handleConfirmCheckIn(previewBooking)}
+                className="h-11 px-6 bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs rounded-2xl shadow-md flex items-center gap-2 min-h-[44px]"
+              >
+                {loading ? (
+                  <span className="flex items-center gap-2 font-mono">
+                    <RefreshCw size={14} className="animate-spin" /> Verifying...
+                  </span>
+                ) : (
+                  <>
+                    <CheckCircle2 size={18} /> Confirm Check-In
+                  </>
+                )}
+              </Button>
+            </div>
+          </Card>
+        </motion.div>
+      )}
+
+      {/* 6. PROMINENT VERIFICATION RESULT PANEL */}
       <AnimatePresence mode="wait">
         {scanResult && (
           <motion.div
@@ -697,61 +979,16 @@ export default function QRScannerPage() {
             aria-live="polite"
           >
             <Card className="border border-slate-200/90 bg-white rounded-3xl p-6 shadow-md overflow-hidden">
-              {scanResult.isTooEarly ? (
-                /* TOO EARLY / FUTURE RESERVATION STATE (AMBER WARNING) */
-                <div className="p-5 bg-amber-50 border-2 border-amber-300 text-navy rounded-2xl space-y-4">
-                  <div className="flex items-start gap-3">
-                    <div className="w-10 h-10 rounded-2xl bg-amber-500 text-white flex items-center justify-center shrink-0 shadow-sm font-bold">
-                      <Clock size={22} />
-                    </div>
-                    <div className="space-y-1">
-                      <h3 className="text-base font-black text-amber-950">Valid Reservation — Check-In Not Open Yet</h3>
-                      <p className="text-xs text-amber-900 font-semibold leading-relaxed">
-                        {scanResult.message}
-                      </p>
-                    </div>
-                  </div>
-
-                  {scanResult.booking && (
-                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 bg-white p-3.5 rounded-xl border border-amber-200 text-xs font-mono">
-                      <div>
-                        <span className="text-slate-400 text-[10px] block uppercase font-extrabold">Student Name</span>
-                        <strong className="text-navy font-bold font-sans text-xs">{scanResult.booking.studentName}</strong>
-                      </div>
-                      <div>
-                        <span className="text-slate-400 text-[10px] block uppercase font-extrabold">Register ID</span>
-                        <strong className="text-indigo-600 font-bold">{scanResult.booking.studentRegistrationNumber || '24AD042'}</strong>
-                      </div>
-                      <div>
-                        <span className="text-slate-400 text-[10px] block uppercase font-extrabold">Booking Date</span>
-                        <strong className="text-amber-700 font-bold">{scanResult.booking.bookingDate}</strong>
-                      </div>
-                      <div>
-                        <span className="text-slate-400 text-[10px] block uppercase font-extrabold">Assigned Seat</span>
-                        <strong className="text-teal-600 font-bold">{scanResult.booking.seatNumber}</strong>
-                      </div>
-                    </div>
-                  )}
-
-                  <div className="flex flex-wrap items-center justify-end gap-3 pt-2 border-t border-amber-200/80">
-                    <Button
-                      onClick={handleScanNextStudent}
-                      className="bg-amber-600 hover:bg-amber-700 text-white font-extrabold text-xs h-10 px-5 rounded-2xl shadow-xs"
-                    >
-                      Scan Next Student →
-                    </Button>
-                  </div>
-                </div>
-              ) : !scanResult.valid ? (
+              {!scanResult.valid ? (
                 /* FAILED VERIFICATION STATE (RED) */
                 <div className="p-5 bg-rose-50 border-2 border-rose-300 text-navy rounded-2xl space-y-4">
                   <div className="flex items-start gap-3">
-                    <div className="w-10 h-10 rounded-2xl bg-rose-600 text-white flex items-center justify-center shrink-0 shadow-sm">
+                    <div className="w-10 h-10 rounded-2xl bg-rose-600 text-white flex items-center justify-center shrink-0 shadow-sm font-bold">
                       <AlertTriangle size={22} />
                     </div>
                     <div className="space-y-1">
                       <h3 className="text-base font-black text-rose-900">Verification Failed</h3>
-                      <p className="text-xs text-rose-800 font-medium leading-relaxed">
+                      <p className="text-xs text-rose-800 font-extrabold leading-relaxed">
                         {scanResult.message}
                       </p>
                     </div>
@@ -760,14 +997,14 @@ export default function QRScannerPage() {
                   <div className="flex flex-wrap items-center justify-end gap-3 pt-2 border-t border-rose-200/80">
                     <Button
                       onClick={handleScanNextStudent}
-                      className="bg-rose-600 hover:bg-rose-700 text-white font-extrabold text-xs h-10 px-5 rounded-2xl shadow-xs"
+                      className="bg-rose-600 hover:bg-rose-700 text-white font-extrabold text-xs h-11 px-5 rounded-2xl shadow-xs min-h-[44px]"
                     >
                       Try Again / Scan Next Student →
                     </Button>
                   </div>
                 </div>
               ) : scanResult.isCheckout ? (
-                /* VERIFIED CHECKOUT RESULT STATE (AMBER / TEAL) */
+                /* CHECKOUT RESULT STATE */
                 <div className="p-5 bg-amber-50/80 border-2 border-amber-300 text-navy rounded-2xl space-y-4">
                   <div className="flex flex-wrap items-center justify-between gap-3 border-b border-amber-200 pb-3">
                     <div className="flex items-center gap-2.5">
@@ -804,7 +1041,7 @@ export default function QRScannerPage() {
                     <Button
                       onClick={() => handleConfirmCheckout(scanResult.booking)}
                       disabled={loading}
-                      className="bg-amber-600 hover:bg-amber-700 text-white font-extrabold text-xs h-10 px-6 rounded-2xl shadow-sm"
+                      className="bg-amber-600 hover:bg-amber-700 text-white font-extrabold text-xs h-11 px-6 rounded-2xl shadow-sm min-h-[44px]"
                     >
                       Confirm Checkout & Release Seat →
                     </Button>
@@ -812,28 +1049,28 @@ export default function QRScannerPage() {
                     <Button
                       onClick={handleScanNextStudent}
                       variant="outline"
-                      className="border-slate-300 text-slate-700 font-bold text-xs h-10 rounded-2xl"
+                      className="border-slate-300 text-slate-700 font-bold text-xs h-11 rounded-2xl min-h-[44px]"
                     >
                       Scan Next Student
                     </Button>
                   </div>
                 </div>
               ) : (
-                /* VERIFIED ENTRY PASS RESULT STATE (GREEN) */
+                /* VERIFIED ENTRY CHECK-IN SUCCESS RESULT STATE (GREEN) */
                 <div className="p-5 bg-emerald-50/80 border-2 border-emerald-300 text-navy rounded-2xl space-y-4">
                   <div className="flex flex-wrap items-center justify-between gap-3 border-b border-emerald-200 pb-3">
                     <div className="flex items-center gap-2.5">
-                      <div className="w-8 h-8 rounded-full bg-emerald-600 text-white flex items-center justify-center font-bold">
-                        <CheckCircle2 size={20} />
+                      <div className="w-9 h-9 rounded-full bg-emerald-600 text-white flex items-center justify-center font-bold shadow-xs">
+                        <CheckCircle2 size={22} />
                       </div>
                       <div>
-                        <h3 className="text-base font-black text-emerald-950">✓ Entry Verified</h3>
-                        <span className="text-[11px] font-mono text-emerald-800 font-medium">Verified at {scanResult.verifiedAt}</span>
+                        <h3 className="text-base font-black text-emerald-950">✓ Entry Check-In Verified</h3>
+                        <span className="text-[11px] font-mono text-emerald-800 font-medium">Verified & Checked In at {scanResult.verifiedAt}</span>
                       </div>
                     </div>
 
-                    <Badge className="bg-emerald-600 text-white font-mono font-extrabold text-xs px-3 py-1 rounded-xl">
-                      VALID ENTRY PASS
+                    <Badge className="bg-emerald-600 text-white font-mono font-extrabold text-xs px-3.5 py-1 rounded-xl">
+                      {scanResult.alreadyCheckedIn ? 'ALREADY CHECKED IN' : 'ENTRY VERIFIED'}
                     </Badge>
                   </div>
 
@@ -844,7 +1081,7 @@ export default function QRScannerPage() {
                     </div>
                     <div>
                       <span className="text-slate-400 text-[10px] block uppercase font-extrabold">Register ID</span>
-                      <strong className="text-indigo-600 font-bold">{scanResult.booking?.studentRegistrationNumber || scanResult.booking?.studentCollegeId || '24AD042'}</strong>
+                      <strong className="text-indigo-600 font-bold">{scanResult.booking?.studentRegistrationNumber || scanResult.booking?.registration_number || 'N/A'}</strong>
                     </div>
                     <div>
                       <span className="text-slate-400 text-[10px] block uppercase font-extrabold">Assigned Seat</span>
@@ -852,25 +1089,16 @@ export default function QRScannerPage() {
                     </div>
                     <div>
                       <span className="text-slate-400 text-[10px] block uppercase font-extrabold">Slot Window</span>
-                      <strong className="text-slate-800">{scanResult.booking?.slotTime || 'Morning Slot 1'}</strong>
+                      <strong className="text-slate-800">{scanResult.booking?.slotTime || scanResult.booking?.slotName || 'Morning Slot'}</strong>
                     </div>
                   </div>
 
-                  <div className="flex flex-wrap items-center justify-between gap-3 pt-2">
-                    <Button
-                      onClick={() => handleConfirmEntry(scanResult.booking)}
-                      disabled={loading}
-                      className="bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs h-10 px-6 rounded-2xl shadow-sm"
-                    >
-                      Confirm Entry & Activate Pass →
-                    </Button>
-
+                  <div className="flex flex-wrap items-center justify-end gap-3 pt-2 border-t border-emerald-200/80">
                     <Button
                       onClick={handleScanNextStudent}
-                      variant="outline"
-                      className="border-slate-300 text-slate-700 font-bold text-xs h-10 rounded-2xl"
+                      className="bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs h-11 px-6 rounded-2xl shadow-sm min-h-[44px]"
                     >
-                      Scan Next Student
+                      Scan / Lookup Next Student →
                     </Button>
                   </div>
                 </div>
@@ -880,7 +1108,7 @@ export default function QRScannerPage() {
         )}
       </AnimatePresence>
 
-      {/* 5. RECENT VERIFICATION ACTIVITY FEED */}
+      {/* 7. RECENT VERIFICATION ACTIVITY FEED */}
       <Card className="border border-slate-200/90 bg-white rounded-3xl p-5 sm:p-6 shadow-xs space-y-4">
         <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 pb-3">
           <div className="flex items-center gap-2">
@@ -943,7 +1171,7 @@ export default function QRScannerPage() {
                         <td className="p-3 text-slate-400 font-medium">{log.timeStr}</td>
                         <td className="p-3 font-bold text-navy font-sans">{log.reference}</td>
                         <td className="p-3">
-                          <span className={`font-bold ${log.action === 'Checkout' ? 'text-amber-600' : 'text-teal-600'}`}>
+                          <span className={`font-bold ${log.action.includes('Checkout') ? 'text-amber-600' : 'text-teal-600'}`}>
                             {log.action}
                           </span>
                         </td>
