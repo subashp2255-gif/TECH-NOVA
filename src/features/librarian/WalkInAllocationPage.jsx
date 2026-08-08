@@ -1,22 +1,17 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useAuth } from '../../auth/AuthProvider';
-import { db } from '../../services/mockDatabase';
 import { bookingService } from '../../services/bookingService';
 import { librarianService } from '../../services/librarianService';
 import { Card, CardContent } from '../../components/shared/Card';
 import { Button } from '../../components/shared/Button';
-import { Input } from '../../components/shared/Input';
 import { Badge } from '../../components/shared/Badge';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '../../components/shared/Dialog';
 import {
   UserPlus, Search, Calendar, Clock, MapPin, CheckCircle2,
-  AlertTriangle, QrCode, Printer, Sparkles, User, Armchair, Wrench, Lock, Check, History, Filter
+  AlertTriangle, QrCode, Printer, Sparkles, User, Armchair, Wrench, Lock, Check, History, Filter, RefreshCw
 } from 'lucide-react';
 import toast from 'react-hot-toast';
-import { formatSlotTime, formatSlotRange, getSlotPeriod, formatSlotTitle, sortSlotsChronologically } from '../../utils/timeUtils.js';
-
-const format12HourTime = formatSlotTime;
-
+import { formatSlotTime } from '../../utils/timeUtils.js';
 
 export default function WalkInAllocationPage() {
   const { user: staffUser } = useAuth();
@@ -33,6 +28,7 @@ export default function WalkInAllocationPage() {
   const [autoCheckIn, setAutoCheckIn] = useState(true);
 
   const [loading, setLoading] = useState(false);
+  const [loadingStudents, setLoadingStudents] = useState(false);
   const [loadingSeats, setLoadingSeats] = useState(false);
   const [bookingResult, setBookingResult] = useState(null);
 
@@ -41,39 +37,58 @@ export default function WalkInAllocationPage() {
   const [historySearch, setHistorySearch] = useState('');
   const [historyStatusFilter, setHistoryStatusFilter] = useState('ALL');
 
+  // Initial load
   useEffect(() => {
     loadInitialData();
   }, [selectedDate]);
 
+  // Debounced Student Search from real public.profiles table
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      fetchActiveStudents(searchStudent);
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [searchStudent]);
+
+  // Load walk-in seats S-41 to S-50 when slot changes
   useEffect(() => {
     if (selectedDate && selectedSlotId) {
       loadWalkInSeats();
     }
   }, [selectedDate, selectedSlotId]);
 
+  const fetchActiveStudents = async (queryStr = '') => {
+    setLoadingStudents(true);
+    try {
+      const activeStudents = await bookingService.searchActiveStudents(queryStr);
+      setStudents(activeStudents || []);
+    } catch (err) {
+      console.warn('Failed to fetch active students:', err);
+    } finally {
+      setLoadingStudents(false);
+    }
+  };
+
   const loadInitialData = async () => {
     try {
-      const [usersData, slotsData, bookingsData] = await Promise.all([
-        db.read('seatsync_users') || [],
+      const [slotsData, operationalBookings] = await Promise.all([
         bookingService.getSlotsAvailability(selectedDate),
-        db.read('seatsync_bookings') || []
+        librarianService.getOperationalBookings(staffUser?.library_id, selectedDate)
       ]);
 
-      const studentList = usersData.filter(u => String(u.role || '').toUpperCase() === 'STUDENT' || !u.role);
-      setStudents(studentList);
       setSlots(slotsData || []);
 
       if (slotsData && slotsData.length > 0 && !selectedSlotId) {
         setSelectedSlotId(slotsData[0].id);
       }
 
-      // Filter walk-in allocation history
-      const walkInBookings = (bookingsData || [])
-        .filter(b => String(b.bookingSource || b.booking_source || '').toLowerCase() === 'walk_in')
+      // Filter real walk-in bookings for history
+      const walkInBookings = (operationalBookings || [])
+        .filter(b => String(b.bookingSource || b.booking_source || '').toLowerCase() === 'librarian_walk_in')
         .sort((a, b) => new Date(b.createdAt || b.created_at || 0) - new Date(a.createdAt || a.created_at || 0));
       setHistoryList(walkInBookings);
     } catch (err) {
-      console.warn('Failed to load walkin initial data:', err);
+      console.warn('Failed to load initial walk-in data:', err);
     }
   };
 
@@ -83,25 +98,19 @@ export default function WalkInAllocationPage() {
       const seatsData = await bookingService.getWalkInSeatsForSlot(null, selectedDate, selectedSlotId);
       setWalkInSeats(seatsData || []);
     } catch (err) {
-      console.warn('Failed to load walkin seats:', err);
+      console.warn('Failed to load walk-in seats:', err);
     } finally {
       setLoadingSeats(false);
     }
   };
 
-  const filteredStudents = students.filter(s =>
-    (s.name || s.full_name || '').toLowerCase().includes(searchStudent.toLowerCase()) ||
-    (s.collegeId || s.registration_number || '').toLowerCase().includes(searchStudent.toLowerCase()) ||
-    (s.email || '').toLowerCase().includes(searchStudent.toLowerCase())
-  );
-
   const selectedSeatObj = walkInSeats.find(s => String(s.id) === String(selectedSeatId) || String(s.seat_number) === String(selectedSeatId));
   const selectedSlotObj = slots.find(s => String(s.id) === String(selectedSlotId));
 
   const handleCreateWalkIn = async (e) => {
-    e.preventDefault();
-    if (!selectedStudent) {
-      toast.error('Please select a student for the walk-in allocation.');
+    if (e) e.preventDefault();
+    if (!selectedStudent || !selectedStudent.id) {
+      toast.error('Please select an active student for the walk-in allocation.');
       return;
     }
     if (!selectedSlotId) {
@@ -119,13 +128,12 @@ export default function WalkInAllocationPage() {
 
     setLoading(true);
     try {
-      const res = await librarianService.createWalkInBooking({
-        student: selectedStudent,
-        seat: selectedSeatObj,
-        slot: selectedSlotObj,
-        dateStr: selectedDate,
-        staffUser,
-        autoCheckIn
+      const res = await bookingService.allocateWalkInSeat({
+        studentId: selectedStudent.id,
+        seatId: selectedSeatObj.id,
+        slotId: selectedSlotId,
+        bookingDate: selectedDate,
+        instantCheckIn: autoCheckIn
       });
 
       setBookingResult(res);
@@ -183,10 +191,10 @@ export default function WalkInAllocationPage() {
 
       <div className="grid lg:grid-cols-3 gap-6 items-start">
         
-        {/* STEP 1: STUDENT SELECTION */}
+        {/* STEP 1: STUDENT SELECTION FROM PUBLIC.PROFILES */}
         <Card className="border border-slate-200/90 bg-white rounded-3xl p-5 shadow-xs space-y-4 lg:col-span-1">
           <h2 className="text-sm font-extrabold text-navy uppercase tracking-wider flex items-center gap-2 border-b border-slate-100 pb-3">
-            <User size={18} className="text-teal-600" /> 1. Select Student
+            <User size={18} className="text-teal-600" /> 1. Select Active Student
           </h2>
 
           <div className="relative">
@@ -196,22 +204,27 @@ export default function WalkInAllocationPage() {
               placeholder="Search student name, ID or email..."
               value={searchStudent}
               onChange={(e) => setSearchStudent(e.target.value)}
-              className="w-full h-9 pl-9 pr-3 rounded-2xl border border-slate-300 text-xs font-medium bg-slate-50 focus:outline-none focus:ring-2 focus:ring-teal-500/20 focus:border-teal-600"
+              className="w-full h-11 pl-9 pr-3 rounded-2xl border border-slate-300 text-xs font-medium bg-slate-50 focus:outline-none focus:ring-2 focus:ring-teal-500/20 focus:border-teal-600 min-h-[44px]"
             />
           </div>
 
-          <div className="space-y-2 max-h-56 overflow-y-auto pr-1">
-            {filteredStudents.length === 0 ? (
-              <p className="text-xs text-slate-400 p-4 text-center">No matching students found.</p>
+          <div className="space-y-2 max-h-64 overflow-y-auto pr-1">
+            {loadingStudents ? (
+              <div className="p-6 text-center text-xs text-slate-400 font-mono animate-pulse">Querying public.profiles...</div>
+            ) : students.length === 0 ? (
+              <div className="p-6 text-center space-y-1">
+                <p className="text-xs text-slate-500 font-bold">No active student profile found.</p>
+                <p className="text-[11px] text-slate-400">Search for active student name, register ID, or email.</p>
+              </div>
             ) : (
-              filteredStudents.map(student => {
-                const isSelected = selectedStudent?.id === student.id || selectedStudent?.email === student.email;
+              students.map(student => {
+                const isSelected = selectedStudent?.id === student.id;
                 return (
                   <div
-                    key={student.id || student.email}
+                    key={student.id}
                     onClick={() => setSelectedStudent(student)}
                     className={`
-                      p-3 rounded-2xl border text-xs cursor-pointer transition-all flex items-center justify-between
+                      p-3 rounded-2xl border text-xs cursor-pointer transition-all flex items-center justify-between min-h-[44px]
                       ${isSelected
                         ? 'bg-teal-50/70 border-teal-600 text-teal-900 font-bold shadow-xs'
                         : 'bg-slate-50/60 border-slate-200/80 hover:bg-slate-100 text-slate-700'
@@ -220,9 +233,11 @@ export default function WalkInAllocationPage() {
                   >
                     <div>
                       <div className="font-bold text-navy">{student.name || student.full_name}</div>
-                      <div className="text-[10px] text-slate-500 font-mono">{student.collegeId || student.registration_number || 'N/A'}</div>
+                      <div className="text-[10px] text-slate-500 font-mono">
+                        {student.collegeId || student.registrationNumber || 'N/A'} • {student.department || 'Student'}
+                      </div>
                     </div>
-                    {isSelected && <CheckCircle2 size={16} className="text-teal-600" />}
+                    {isSelected && <CheckCircle2 size={16} className="text-teal-600 shrink-0" />}
                   </div>
                 );
               })
@@ -231,9 +246,11 @@ export default function WalkInAllocationPage() {
 
           {selectedStudent && (
             <div className="p-3 bg-teal-50 border border-teal-200 rounded-2xl text-xs space-y-1">
-              <span className="text-[10px] uppercase font-bold text-teal-700 block">Selected Candidate</span>
-              <div className="font-extrabold text-navy">{selectedStudent.name || selectedStudent.full_name}</div>
-              <div className="text-[11px] text-teal-800 font-mono">{selectedStudent.collegeId || 'N/A'} • {selectedStudent.department || 'CSE'}</div>
+              <span className="text-[10px] uppercase font-extrabold text-teal-700 block">Selected Candidate</span>
+              <div className="font-extrabold text-navy text-sm">{selectedStudent.name || selectedStudent.full_name}</div>
+              <div className="text-[11px] text-teal-800 font-mono">
+                {selectedStudent.collegeId || selectedStudent.registrationNumber || 'N/A'} • {selectedStudent.email}
+              </div>
             </div>
           )}
         </Card>
@@ -257,7 +274,7 @@ export default function WalkInAllocationPage() {
                 type="date"
                 value={selectedDate}
                 onChange={(e) => setSelectedDate(e.target.value)}
-                className="w-full h-10 bg-slate-50 border border-slate-300 text-navy font-bold text-xs rounded-2xl px-3 font-mono"
+                className="w-full h-11 bg-slate-50 border border-slate-300 text-navy font-bold text-xs rounded-2xl px-3 font-mono min-h-[44px]"
               />
             </div>
 
@@ -269,11 +286,11 @@ export default function WalkInAllocationPage() {
               <select
                 value={selectedSlotId}
                 onChange={(e) => setSelectedSlotId(e.target.value)}
-                className="w-full h-10 bg-slate-50 border border-slate-300 text-navy font-bold text-xs rounded-2xl px-3 font-mono"
+                className="w-full h-11 bg-slate-50 border border-slate-300 text-navy font-bold text-xs rounded-2xl px-3 font-mono min-h-[44px]"
               >
                 {slots.map(s => (
                   <option key={s.id} value={s.id}>
-                    {s.name} ({format12HourTime(s.startTime || s.start_time)} – {format12HourTime(s.endTime || s.end_time)})
+                    {s.name} ({formatSlotTime(s.startTime || s.start_time)} – {formatSlotTime(s.endTime || s.end_time)})
                   </option>
                 ))}
               </select>
@@ -290,7 +307,7 @@ export default function WalkInAllocationPage() {
             </div>
 
             {loadingSeats ? (
-              <div className="p-8 text-center text-xs text-slate-400 font-mono animate-pulse">Loading walk-in seats S-41 to S-50...</div>
+              <div className="p-8 text-center text-xs text-slate-400 font-mono animate-pulse">Loading walk-in seats S-41 to S-50 from Supabase...</div>
             ) : (
               <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
                 {walkInSeats.map(seat => {
@@ -305,9 +322,9 @@ export default function WalkInAllocationPage() {
                       key={seat.id}
                       type="button"
                       disabled={!isAvailable}
-                      onClick={() => setSelectedSeatId(seat.id || seat.seat_number)}
+                      onClick={() => setSelectedSeatId(seat.id)}
                       className={`
-                        h-16 rounded-2xl border flex flex-col items-center justify-center p-2 text-xs font-bold transition-all shadow-xs relative
+                        h-16 rounded-2xl border flex flex-col items-center justify-center p-2 text-xs font-bold transition-all shadow-xs relative min-h-[44px]
                         ${!isAvailable
                           ? isMaintenance
                             ? 'bg-rose-100 text-rose-800 border-rose-300 cursor-not-allowed'
@@ -320,7 +337,7 @@ export default function WalkInAllocationPage() {
                         }
                       `}
                     >
-                      <span className="font-mono font-black text-sm">{seat.seat_number}</span>
+                      <span className="font-mono font-black text-sm">{seat.seat_number || seat.seatNumber}</span>
                       <span className="text-[9px] font-normal opacity-90">
                         {isMaintenance ? 'Maintenance' : isCheckedIn ? 'Checked-In' : isAllocated ? 'Allocated' : 'Available'}
                       </span>
@@ -347,9 +364,17 @@ export default function WalkInAllocationPage() {
               type="button"
               disabled={loading || !selectedStudent || !selectedSeatId}
               onClick={handleCreateWalkIn}
-              className="w-full bg-teal-600 hover:bg-teal-700 text-white font-extrabold text-xs h-11 rounded-2xl shadow-md flex items-center justify-center gap-2 disabled:opacity-50"
+              className="w-full bg-teal-600 hover:bg-teal-700 text-white font-extrabold text-xs h-11 rounded-2xl shadow-md flex items-center justify-center gap-2 disabled:opacity-50 min-h-[44px]"
             >
-              <UserPlus size={16} /> Confirm & Allocate Walk-In Seat →
+              {loading ? (
+                <span className="flex items-center gap-2 font-mono">
+                  <RefreshCw size={14} className="animate-spin" /> Executing Supabase RPC...
+                </span>
+              ) : (
+                <>
+                  <UserPlus size={16} /> Confirm & Allocate Walk-In Seat →
+                </>
+              )}
             </Button>
           </div>
         </Card>
@@ -375,7 +400,7 @@ export default function WalkInAllocationPage() {
                 placeholder="Search student, seat..."
                 value={historySearch}
                 onChange={(e) => setHistorySearch(e.target.value)}
-                className="w-full h-9 pl-9 pr-3 rounded-2xl border border-slate-300 text-xs font-medium bg-slate-50"
+                className="w-full h-9 pl-9 pr-3 rounded-2xl border border-slate-300 text-xs font-medium bg-slate-50 min-h-[44px]"
               />
             </div>
           </div>
@@ -403,11 +428,11 @@ export default function WalkInAllocationPage() {
                     <td className="p-4 font-mono font-bold text-teal-600">{b.bookingCode || b.booking_code}</td>
                     <td className="p-4 font-bold text-navy">
                       <div>{b.studentName || b.student_name}</div>
-                      <span className="text-[10px] font-mono text-slate-500">{b.studentRegistrationNumber || b.collegeId || 'N/A'}</span>
+                      <span className="text-[10px] font-mono text-slate-500">{b.studentRegistrationNumber || b.registration_number || 'N/A'}</span>
                     </td>
                     <td className="p-4 font-mono font-extrabold text-amber-700">{b.seatNumber || b.seat_number}</td>
-                    <td className="p-4 font-mono text-slate-600">{b.bookingDate || b.booking_date} ({b.slotName || 'Slot'})</td>
-                    <td className="p-4 text-slate-600">{b.allocatedBy || 'Staff Librarian'}</td>
+                    <td className="p-4 font-mono text-slate-600">{b.bookingDate || b.booking_date} ({b.slotName || b.slot_name || 'Slot'})</td>
+                    <td className="p-4 text-slate-600">{b.allocatedByName || b.allocatedBy || 'Staff Librarian'}</td>
                     <td className="p-4">
                       <Badge className={`text-[10px] font-bold ${
                         String(b.status).toLowerCase() === 'checked_in' ? 'bg-teal-600 text-white' : 'bg-emerald-600 text-white'
@@ -443,7 +468,7 @@ export default function WalkInAllocationPage() {
             <div className="p-4 bg-slate-50 border border-slate-200 rounded-2xl space-y-2 text-xs font-mono">
               <div className="flex justify-between">
                 <span className="text-slate-500">Pass Code:</span>
-                <strong className="text-teal-600 font-extrabold">{bookingResult.bookingCode}</strong>
+                <strong className="text-teal-600 font-extrabold">{bookingResult.bookingCode || bookingResult.booking_code}</strong>
               </div>
               <div className="flex justify-between">
                 <span className="text-slate-500">Student:</span>
@@ -458,6 +483,18 @@ export default function WalkInAllocationPage() {
                 <strong className="text-slate-800">{bookingResult.bookingDate} ({bookingResult.slotName})</strong>
               </div>
               <div className="flex justify-between">
+                <span className="text-slate-500">Allocated By:</span>
+                <strong className="text-indigo-600 font-bold">{bookingResult.allocatedByName || 'Staff Librarian'}</strong>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-500">Source Standing:</span>
+                <span className="text-amber-700 font-bold bg-amber-100/80 px-2 py-0.5 rounded">Walk-In • Allocated by Librarian</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-500">Cancellation:</span>
+                <span className="text-rose-700 font-bold bg-rose-100/80 px-2 py-0.5 rounded">Non-cancellable</span>
+              </div>
+              <div className="flex justify-between">
                 <span className="text-slate-500">Initial Status:</span>
                 <strong className="text-emerald-600 uppercase font-bold">{bookingResult.status}</strong>
               </div>
@@ -465,7 +502,7 @@ export default function WalkInAllocationPage() {
 
             <Button
               onClick={() => setBookingResult(null)}
-              className="w-full bg-navy hover:bg-slate-900 text-white font-bold text-xs h-10 rounded-2xl"
+              className="w-full bg-navy hover:bg-slate-900 text-white font-bold text-xs h-11 rounded-2xl min-h-[44px]"
             >
               Done & Issue Pass →
             </Button>

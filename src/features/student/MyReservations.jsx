@@ -527,9 +527,21 @@ export default function MyReservations() {
                       </div>
                     </div>
 
+                    {/* WALK-IN ALLOCATION NOTICE */}
+                    {(booking.booking_source === 'librarian_walk_in' || booking.bookingSource === 'librarian_walk_in' || booking.is_cancellable === false || booking.isCancellable === false) && (
+                      <div className="p-3 bg-amber-50/80 border border-amber-200 rounded-xl text-xs flex items-center justify-between gap-2 text-amber-900 font-medium">
+                        <span className="font-bold flex items-center gap-1.5">
+                          <Badge className="bg-amber-600 text-white font-mono font-extrabold text-[10px] px-2 py-0.5 rounded-md">
+                            Walk-In • Allocated by Librarian
+                          </Badge>
+                          <span>Non-cancellable walk-in allocation. This seat was allocated at the librarian desk.</span>
+                        </span>
+                      </div>
+                    )}
+
                     {/* FOOTER ACTIONS */}
                     {!isCancelledByAdmin && !isCancelledByStudent && !isCompleted && (
-                      <div className="flex flex-wrap items-center justify-end gap-2 pt-1 border-t border-slate-100">
+                      <div className="flex flex-wrap items-center justify-between gap-2 pt-1 border-t border-slate-100">
                         <Button
                           onClick={() => setQrModalTarget(booking)}
                           variant="outline"
@@ -538,13 +550,19 @@ export default function MyReservations() {
                           <QrCode size={13} className="mr-1.5" /> View QR Pass
                         </Button>
 
-                        <Button
-                          onClick={() => setCancelTarget(booking)}
-                          variant="ghost"
-                          className="h-8 text-xs font-bold rounded-xl text-red-600 hover:bg-red-50"
-                        >
-                          <XCircle size={13} className="mr-1.5" /> Cancel Pass
-                        </Button>
+                        {(booking.booking_source === 'librarian_walk_in' || booking.bookingSource === 'librarian_walk_in' || booking.is_cancellable === false || booking.isCancellable === false) ? (
+                          <span className="text-[11px] font-bold text-amber-800 bg-amber-100/70 px-3 py-1 rounded-xl border border-amber-300">
+                            Non-cancellable Walk-In Pass
+                          </span>
+                        ) : (
+                          <Button
+                            onClick={() => setCancelTarget(booking)}
+                            variant="ghost"
+                            className="h-8 text-xs font-bold rounded-xl text-red-600 hover:bg-red-50"
+                          >
+                            <XCircle size={13} className="mr-1.5" /> Cancel Pass
+                          </Button>
+                        )}
                       </div>
                     )}
                   </CardContent>

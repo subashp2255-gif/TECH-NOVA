@@ -192,8 +192,8 @@ export const bookingService = {
       ]);
 
       if (seats && seats.length > 0) {
-        // Filter ONLY online seats for student seat map (S-01 to S-40)
-        const onlineSeats = seats.filter(s => s.allocation_mode !== 'walk_in_only');
+        // Filter ONLY online seats for student seat map (exclude is_walk_in_only seats S-41 to S-50)
+        const onlineSeats = seats.filter(s => s.allocation_mode !== 'walk_in_only' && s.is_walk_in_only !== true && !String(s.seat_number || '').match(/^S-(4[1-9]|50)$/i));
 
         const activeBookings = (bookings || []).filter(b => 
           (b.slot_id === slotId || b.slotId === slotId) &&
@@ -336,19 +336,129 @@ export const bookingService = {
     });
   },
 
-  async getWalkInSeatsForSlot(roomId, dateStr, slotId) {
-    if (isUUID(roomId) && isUUID(slotId)) {
-      try {
-        const { data, error } = await supabase.rpc('get_walk_in_available_seats', {
-          p_room_id: roomId,
-          p_booking_date: dateStr,
-          p_slot_id: slotId
-        });
-        if (!error && data && data.length > 0) return data;
-      } catch { /* fallback */ }
+  // SEARCH ACTIVE STUDENTS (SUPABASE REAL DATA)
+  async searchActiveStudents(queryStr = '') {
+    const clean = (queryStr || '').trim();
+    try {
+      let query = supabase
+        .from('profiles')
+        .select('id, full_name, email, registration_number, department, role, status, avatar_url')
+        .eq('role', 'student')
+        .eq('status', 'active');
+
+      if (clean) {
+        query = query.or(`full_name.ilike.%${clean}%,registration_number.ilike.%${clean}%,email.ilike.%${clean}%`);
+      }
+
+      const { data, error } = await query.order('full_name').limit(20);
+
+      if (!error && data) {
+        return data.map(u => ({
+          id: u.id,
+          name: u.full_name,
+          fullName: u.full_name,
+          full_name: u.full_name,
+          email: u.email,
+          collegeId: u.registration_number,
+          registrationNumber: u.registration_number,
+          registration_number: u.registration_number,
+          department: u.department || 'N/A',
+          role: u.role,
+          status: u.status,
+          avatarUrl: u.avatar_url
+        }));
+      }
+    } catch (err) {
+      console.warn('[bookingService] searchActiveStudents notice:', err.message);
     }
 
-    // Local fallback for S-41 to S-50
+    const localUsers = (await db.read('seatsync_users')) || [];
+    return localUsers
+      .filter(u => String(u.role || '').toLowerCase() === 'student' && String(u.status || 'active').toLowerCase() === 'active')
+      .filter(u => !clean ||
+        (u.name || u.full_name || '').toLowerCase().includes(clean.toLowerCase()) ||
+        (u.collegeId || u.registration_number || '').toLowerCase().includes(clean.toLowerCase()) ||
+        (u.email || '').toLowerCase().includes(clean.toLowerCase())
+      )
+      .map(u => ({
+        id: u.id,
+        name: u.name || u.full_name,
+        fullName: u.name || u.full_name,
+        full_name: u.name || u.full_name,
+        email: u.email,
+        collegeId: u.collegeId || u.registration_number || 'N/A',
+        registrationNumber: u.collegeId || u.registration_number || 'N/A',
+        registration_number: u.collegeId || u.registration_number || 'N/A',
+        department: u.department || 'N/A',
+        role: u.role || 'student',
+        status: u.status || 'active'
+      }));
+  },
+
+  // REAL SUPABASE WALK-IN SEATS S-41 TO S-50 FOR SLOT
+  async getWalkInSeatsForSlot(roomId, dateStr, slotId) {
+    try {
+      const [{ data: seats }, { data: bookings }, { data: maintenanceList }] = await Promise.all([
+        supabase.from('seats').select('*').or('is_walk_in_only.eq.true,seat_number.ilike.S-4%,seat_number.ilike.S-50').order('seat_number'),
+        supabase.from('bookings').select('*').eq('booking_date', dateStr),
+        supabase.from('seat_maintenance').select('seat_id, status').in('status', ['reported', 'in_progress'])
+      ]);
+
+      if (seats && seats.length > 0) {
+        const activeBookings = (bookings || []).filter(b =>
+          (b.slot_id === slotId || b.slotId === slotId) &&
+          ['confirmed', 'awaiting_check_in', 'checked_in', 'active', 'checkout_pending'].includes(String(b.status || '').toLowerCase())
+        );
+
+        const bookingMap = new Map();
+        activeBookings.forEach(b => {
+          if (b.seat_id) bookingMap.set(b.seat_id, b);
+        });
+
+        const maintMap = new Map();
+        (maintenanceList || []).forEach(m => {
+          if (m.seat_id) maintMap.set(m.seat_id, m);
+        });
+
+        return seats.map(s => {
+          const booking = bookingMap.get(s.id);
+          const activeMaint = maintMap.get(s.id);
+          let computedStatus = 'available';
+
+          if (s.status === 'maintenance' || activeMaint) {
+            computedStatus = 'maintenance';
+          } else if (booking) {
+            const bStatus = String(booking.status || '').toLowerCase();
+            if (bStatus === 'checked_in' || bStatus === 'active') {
+              computedStatus = 'checked_in';
+            } else {
+              computedStatus = 'allocated';
+            }
+          }
+
+          return {
+            id: s.id,
+            seat_number: s.seat_number,
+            seatNumber: s.seat_number,
+            is_walk_in_only: Boolean(s.is_walk_in_only),
+            allocation_mode: 'walk_in_only',
+            physical_status: s.status,
+            has_power_socket: s.has_power_socket ?? true,
+            is_accessible: Boolean(s.is_accessible),
+            computed_status: computedStatus,
+            active_booking: booking ? {
+              id: booking.id,
+              booking_code: booking.booking_code || booking.bookingCode,
+              student_id: booking.student_id || booking.studentId,
+              status: booking.status,
+              booking_source: booking.booking_source || 'librarian_walk_in'
+            } : null
+          };
+        });
+      }
+    } catch { /* fallback */ }
+
+    // Fallback local S-41 to S-50
     const rawSeats = (await db.read('seatsync_seats')) || [];
     const bookings = (await db.read('seatsync_bookings')) || [];
 
@@ -394,6 +504,7 @@ export const bookingService = {
       return {
         id: s.id,
         seat_number: s.seat_number,
+        seatNumber: s.seat_number,
         allocation_mode: 'walk_in_only',
         physical_status: s.status,
         has_power_socket: s.has_power_socket,
@@ -404,10 +515,207 @@ export const bookingService = {
           booking_code: booking.bookingCode || booking.booking_code,
           student_id: booking.studentId || booking.student_id,
           status: booking.status,
-          booking_source: booking.bookingSource || 'walk_in'
+          booking_source: booking.bookingSource || 'librarian_walk_in'
         } : null
       };
     });
+  },
+
+  // ATOMIC WALK-IN ALLOCATION RPC CALL WITH RESOLUTION & SEAMLESS FALLBACK
+  async allocateWalkInSeat({ studentId, seatId, slotOccurrenceId = null, slotId = null, bookingDate = null, instantCheckIn = true, idempotencyKey = null }) {
+    if (!studentId) {
+      throw new Error('Please select a valid active student profile.');
+    }
+    if (!seatId) {
+      throw new Error('Please select an available walk-in pool seat (S-41 to S-50).');
+    }
+
+    const dateStr = bookingDate || format(new Date(), 'yyyy-MM-dd');
+    let resolvedSeatId = seatId;
+    let resolvedSeatNumber = typeof seatId === 'string' && seatId.startsWith('S-') ? seatId : 'S-41';
+    let resolvedStudentId = studentId;
+
+    // Resolve Student UUID if student object or registration number passed
+    if (!isUUID(resolvedStudentId)) {
+      try {
+        const { data: prof } = await supabase.from('profiles').select('id, full_name, registration_number').or(`id.eq.${studentId},registration_number.eq.${studentId}`).maybeSingle();
+        if (prof?.id) resolvedStudentId = prof.id;
+      } catch { /* proceed */ }
+    }
+
+    // Resolve Seat UUID from public.seats if seat_number string passed
+    try {
+      if (isUUID(seatId)) {
+        const { data: seatRow } = await supabase.from('seats').select('id, seat_number').eq('id', seatId).maybeSingle();
+        if (seatRow) {
+          resolvedSeatId = seatRow.id;
+          resolvedSeatNumber = seatRow.seat_number;
+        }
+      } else {
+        const targetNum = String(seatId).replace(/^seat-/, 'S-');
+        const { data: seatRow } = await supabase.from('seats').select('id, seat_number').or(`seat_number.eq.${targetNum},seat_number.eq.${seatId}`).limit(1).maybeSingle();
+        if (seatRow) {
+          resolvedSeatId = seatRow.id;
+          resolvedSeatNumber = seatRow.seat_number;
+        }
+      }
+    } catch { /* proceed */ }
+
+    // Resolve Slot UUID if needed
+    let resolvedSlotId = slotId;
+    if (slotId && !isUUID(slotId)) {
+      const slotRow = await slotService.getSlotByCode(slotId);
+      if (slotRow?.id) resolvedSlotId = slotRow.id;
+    }
+
+    // Attempt 1: Call Supabase RPC allocate_walk_in_seat
+    if (isUUID(resolvedStudentId)) {
+      try {
+        const rpcPayload = {
+          p_student_id: resolvedStudentId,
+          p_seat_id: String(resolvedSeatId)
+        };
+        if (slotOccurrenceId && isUUID(slotOccurrenceId)) rpcPayload.p_slot_occurrence_id = slotOccurrenceId;
+        if (resolvedSlotId) rpcPayload.p_slot_id = String(resolvedSlotId);
+        if (dateStr) rpcPayload.p_booking_date = dateStr;
+        rpcPayload.p_instant_check_in = Boolean(instantCheckIn);
+        if (idempotencyKey) rpcPayload.p_idempotency_key = idempotencyKey;
+
+        const { data, error } = await supabase.rpc('allocate_walk_in_seat', rpcPayload);
+
+        if (!error && data) {
+          if (data.success === false) {
+            throw new Error(data.message || 'Walk-In seat allocation failed.');
+          }
+          const b = data.booking || {};
+          return {
+            id: b.id,
+            bookingCode: b.booking_code,
+            booking_code: b.booking_code,
+            studentId: b.student_id,
+            studentName: b.student_name,
+            studentRegistrationNumber: b.registration_number,
+            department: b.department,
+            seatId: b.seat_id,
+            seatNumber: b.seat_number || resolvedSeatNumber,
+            roomName: b.room_name,
+            floorName: b.floor_name,
+            libraryName: b.library_name,
+            slotName: b.slot_name,
+            slotTime: b.slot_time,
+            bookingDate: b.booking_date || dateStr,
+            bookingSource: 'librarian_walk_in',
+            createdBy: b.created_by,
+            allocatedByName: b.allocated_by_name || 'Staff Librarian',
+            isCancellable: false,
+            status: b.status,
+            checkedInAt: b.checked_in_at,
+            createdAt: b.created_at
+          };
+        }
+      } catch (rpcErr) {
+        if (rpcErr.message && !rpcErr.message.includes('schema cache') && !rpcErr.message.includes('Could not find')) {
+          throw rpcErr;
+        }
+        console.warn('[bookingService] RPC missing or schema cache pending. Falling back to direct database allocation:', rpcErr.message);
+      }
+    }
+
+    // Attempt 2: Fallback Direct Insert via Supabase Client
+    if (isUUID(resolvedStudentId) && isUUID(resolvedSeatId)) {
+      try {
+        const { data: studentProf } = await supabase.from('profiles').select('full_name, registration_number, department').eq('id', resolvedStudentId).maybeSingle();
+        const { data: seatRow } = await supabase.from('seats').select('id, seat_number, room_id, rooms(library_id, floor_id, name)').eq('id', resolvedSeatId).maybeSingle();
+
+        const bookingCode = `BK-${Math.floor(10000000 + Math.random() * 90000000)}`;
+        const qrToken = `QR-${Math.floor(1000000000 + Math.random() * 9000000000)}`;
+
+        const { data: newB, error: insErr } = await supabase
+          .from('bookings')
+          .insert({
+            booking_code: bookingCode,
+            student_id: resolvedStudentId,
+            library_id: seatRow?.rooms?.library_id,
+            floor_id: seatRow?.rooms?.floor_id,
+            room_id: seatRow?.room_id,
+            seat_id: resolvedSeatId,
+            slot_id: isUUID(resolvedSlotId) ? resolvedSlotId : null,
+            booking_date: dateStr,
+            status: instantCheckIn ? 'checked_in' : 'confirmed',
+            booking_source: 'librarian_walk_in',
+            is_cancellable: false,
+            qr_token: qrToken,
+            checked_in_at: instantCheckIn ? new Date().toISOString() : null
+          })
+          .select()
+          .single();
+
+        if (!insErr && newB) {
+          if (instantCheckIn) {
+            await supabase.from('check_in_logs').insert({
+              booking_id: newB.id,
+              student_id: resolvedStudentId,
+              seat_id: resolvedSeatId,
+              action: 'check_in',
+              method: 'manual',
+              notes: 'Walk-In Instant Check-In Verified by Staff Librarian'
+            }).catch(() => {});
+          }
+
+          return {
+            id: newB.id,
+            bookingCode,
+            booking_code: bookingCode,
+            studentId: resolvedStudentId,
+            studentName: studentProf?.full_name || 'Student',
+            studentRegistrationNumber: studentProf?.registration_number || 'N/A',
+            department: studentProf?.department || 'N/A',
+            seatId: resolvedSeatId,
+            seatNumber: seatRow?.seat_number || resolvedSeatNumber,
+            bookingDate: dateStr,
+            bookingSource: 'librarian_walk_in',
+            isCancellable: false,
+            status: newB.status,
+            checkedInAt: newB.checked_in_at,
+            createdAt: newB.created_at
+          };
+        }
+      } catch (dirErr) {
+        console.warn('[bookingService] Direct insert fallback error:', dirErr.message);
+      }
+    }
+
+    // Local DB fallback for offline or un-migrated dev environment
+    const bookings = (await db.read('seatsync_bookings')) || [];
+    const bookingCode = `BK-${Math.floor(10000000 + Math.random() * 90000000)}`;
+
+    const newLocalBooking = {
+      id: `BK-${Date.now()}`,
+      booking_code: bookingCode,
+      bookingCode,
+      studentId: resolvedStudentId,
+      student_id: resolvedStudentId,
+      studentName: 'Walk-In Student',
+      student_name: 'Walk-In Student',
+      seatId: resolvedSeatId,
+      seat_id: resolvedSeatId,
+      seatNumber: resolvedSeatNumber,
+      seat_number: resolvedSeatNumber,
+      bookingDate: dateStr,
+      booking_date: dateStr,
+      slotId: resolvedSlotId || 'SLOT-01',
+      bookingSource: 'librarian_walk_in',
+      booking_source: 'librarian_walk_in',
+      isCancellable: false,
+      is_cancellable: false,
+      status: instantCheckIn ? 'checked_in' : 'confirmed',
+      checkedInAt: instantCheckIn ? new Date().toISOString() : null,
+      createdAt: new Date().toISOString()
+    };
+
+    bookings.push(newLocalBooking);
+    await db.write('seatsync_bookings', bookings);
+    return newLocalBooking;
   },
 
   async getBookingsForSlot(slotId, dateStr) {
@@ -628,22 +936,39 @@ export const bookingService = {
   async cancelBooking(bookingId, studentId) {
     if (isUUID(bookingId)) {
       try {
-        const { data: result, error } = await supabase.rpc('cancel_booking', {
+        // First check if booking is walk-in / non-cancellable
+        const { data: bCheck } = await supabase.from('bookings').select('booking_source, is_cancellable').eq('id', bookingId).maybeSingle();
+        if (bCheck && (bCheck.booking_source === 'librarian_walk_in' || bCheck.is_cancellable === false)) {
+          throw new Error('This librarian walk-in allocation cannot be cancelled.');
+        }
+
+        const { data: result, error } = await supabase.rpc('cancel_seat_booking', {
           p_booking_id: bookingId,
           p_reason: 'Cancelled by student'
         });
 
-        if (!error && result) {
-          return result;
+        if (error) {
+          if (error.message && error.message.includes('walk-in')) {
+            throw new Error('This librarian walk-in allocation cannot be cancelled.');
+          }
+          throw error;
         }
-      } catch { /* fallback */ }
+
+        if (result) return result;
+      } catch (err) {
+        if (err.message && err.message.includes('walk-in')) throw err;
+      }
     }
 
     const bookings = (await db.read('seatsync_bookings')) || [];
-    const target = bookings.find(b => b.id === bookingId && String(b.studentId || b.student_id) === String(studentId));
+    const target = bookings.find(b => String(b.id) === String(bookingId) && String(b.studentId || b.student_id) === String(studentId));
 
     if (!target) {
       throw new Error('Booking not found or not owned by student.');
+    }
+
+    if (target.bookingSource === 'librarian_walk_in' || target.booking_source === 'librarian_walk_in' || target.isCancellable === false || target.is_cancellable === false) {
+      throw new Error('This librarian walk-in allocation cannot be cancelled.');
     }
 
     target.status = 'cancelled';
