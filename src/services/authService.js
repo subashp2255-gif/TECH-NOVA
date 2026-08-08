@@ -230,12 +230,30 @@ export const authService = {
       }
 
       if (profile) {
-        const accountStatus = String(profile.status || profile.account_status || 'active').toLowerCase();
+        // Call get_my_access_status RPC to retrieve comprehensive access info
+        let myStatus = null;
+        try {
+          const { data: statusData } = await supabase.rpc('get_my_access_status');
+          if (statusData) myStatus = statusData;
+        } catch { /* proceed with profile */ }
+
+        const accountStatus = String(myStatus?.account_status || profile.account_status || profile.status || 'active').toLowerCase();
 
         if (accountStatus === 'blocked') {
+          const blockedInfo = {
+            reason: myStatus?.blocked_reason || profile.blocked_reason || 'Policy violation',
+            blockedAt: myStatus?.blocked_at || profile.blocked_at || new Date().toISOString(),
+            blockedBy: myStatus?.blocked_by_display_name || 'Library Administration'
+          };
+          try {
+            sessionStorage.setItem('seatsync_blocked_info', JSON.stringify(blockedInfo));
+            localStorage.setItem('seatsync_blocked_info', JSON.stringify(blockedInfo));
+          } catch { /* fallback */ }
+
           await supabase.auth.signOut();
-          const err = new Error(`Your SeatSync account is blocked. Please contact the library administrator. (${profile.blocked_reason || 'Blocked'})`);
+          const err = new Error(`Your SeatSync account has been blocked by library staff.\n\nReason: ${blockedInfo.reason}`);
           err.code = 'ACCOUNT_BLOCKED';
+          err.blockedInfo = blockedInfo;
           throw err;
         }
 
@@ -581,6 +599,116 @@ export const authService = {
         return '/admin/dashboard';
       default:
         return '/unauthorized';
+    }
+  },
+
+  // STUDENT ACCESS MANAGEMENT ENGINE (RPC)
+  async getMyAccessStatus() {
+    try {
+      const { data, error } = await supabase.rpc('get_my_access_status');
+      if (error) {
+        console.error('[authService] get_my_access_status RPC error:', error);
+        return { authenticated: false, account_status: 'active' };
+      }
+      return data || { authenticated: false, account_status: 'active' };
+    } catch (err) {
+      console.warn('[authService] getMyAccessStatus notice:', err);
+      return { authenticated: false, account_status: 'active' };
+    }
+  },
+
+  async blockStudentAccess({ studentId, reason, category = 'Policy violation', expiresAt = null }) {
+    if (!studentId || !isUUID(studentId)) {
+      throw new Error('Please select a valid student account.');
+    }
+    const cleanReason = String(reason || '').trim();
+    if (!cleanReason) {
+      throw new Error('Reason for blocking access is required.');
+    }
+
+    const { data, error } = await supabase.rpc('block_student_access', {
+      p_student_id: studentId,
+      p_reason: cleanReason,
+      p_category: category || 'Policy violation',
+      p_expires_at: expiresAt || null
+    });
+
+    if (error) {
+      console.error('[authService] block_student_access RPC error:', error);
+      throw new Error(error.message || 'Failed to block student access.');
+    }
+
+    if (data && !data.success) {
+      throw new Error(data.message || 'Block action rejected.');
+    }
+
+    return data;
+  },
+
+  async unblockStudentAccess({ studentId, unblockReason }) {
+    if (!studentId || !isUUID(studentId)) {
+      throw new Error('Please select a valid student account.');
+    }
+    const cleanReason = String(unblockReason || '').trim();
+    if (!cleanReason) {
+      throw new Error('Resolution reason is required to unblock access.');
+    }
+
+    const { data, error } = await supabase.rpc('unblock_student_access', {
+      p_student_id: studentId,
+      p_unblock_reason: cleanReason
+    });
+
+    if (error) {
+      console.error('[authService] unblock_student_access RPC error:', error);
+      throw new Error(error.message || 'Failed to unblock student access.');
+    }
+
+    if (data && !data.success) {
+      throw new Error(data.message || 'Unblock action rejected.');
+    }
+
+    return data;
+  },
+
+  async getStudentAccessBlockReport({ status = null, fromDate = null, toDate = null, department = null } = {}) {
+    try {
+      const { data, error } = await supabase.rpc('get_student_access_block_report', {
+        p_status: status && status !== 'all' ? status : null,
+        p_from_date: fromDate || null,
+        p_to_date: toDate || null,
+        p_department: department && department !== 'all' ? department : null
+      });
+
+      if (error) {
+        console.error('[authService] get_student_access_block_report RPC error:', error);
+        throw error;
+      }
+
+      return (data || []).map(r => ({
+        blockRecordId: r.block_record_id,
+        studentId: r.student_id,
+        studentName: r.student_name,
+        registrationNumber: r.registration_number || 'N/A',
+        email: r.email,
+        department: r.department,
+        currentAccountStatus: r.current_account_status,
+        blockStatus: r.block_status, // 'active' | 'resolved' | 'expired'
+        blockCategory: r.block_category,
+        blockReason: r.block_reason,
+        blockedAt: r.blocked_at,
+        blockedById: r.blocked_by_id,
+        blockedByName: r.blocked_by_name || 'Library Staff',
+        expiresAt: r.expires_at,
+        unblockedAt: r.unblocked_at,
+        unblockedById: r.unblocked_by_id,
+        unblockedByName: r.unblocked_by_name,
+        unblockReason: r.unblock_reason,
+        duration: r.duration
+      }));
+    } catch (err) {
+      console.warn('[authService] getStudentAccessBlockReport notice:', err.message);
+      throw err;
     }
   }
 };

@@ -57,16 +57,15 @@ export const defaultUsers = [
 ];
 
 export const defaultSlots = [
-  { id: 'SLOT-01', label: 'Morning Slot 1', startTime: '08:00 AM', endTime: '09:00 AM', active: true },
-  { id: 'SLOT-02', label: 'Morning Slot 2', startTime: '09:00 AM', endTime: '10:00 AM', active: true },
-  { id: 'SLOT-03', label: 'Morning Slot 3', startTime: '10:00 AM', endTime: '11:00 AM', active: true },
-  { id: 'SLOT-04', label: 'Morning Slot 4', startTime: '11:00 AM', endTime: '12:00 PM', active: true },
-  { id: 'SLOT-05', label: 'Afternoon Slot 1', startTime: '12:00 PM', endTime: '01:00 PM', active: true },
-  { id: 'SLOT-06', label: 'Afternoon Slot 2', startTime: '01:00 PM', endTime: '02:00 PM', active: true },
-  { id: 'SLOT-07', label: 'Afternoon Slot 3', startTime: '02:00 PM', endTime: '03:00 PM', active: true },
-  { id: 'SLOT-08', label: 'Afternoon Slot 4', startTime: '03:00 PM', endTime: '04:00 PM', active: true },
-  { id: 'SLOT-09', label: 'Evening Slot 1', startTime: '04:00 PM', endTime: '05:00 PM', active: true },
-  { id: 'SLOT-10', label: 'Evening Slot 2', startTime: '05:00 PM', endTime: '06:00 PM', active: true }
+  { id: 'SLOT-01', label: 'Morning Slot 1', name: 'Morning Slot 1', startTime: '08:00 AM', endTime: '09:00 AM', start_time: '08:00:00', end_time: '09:00:00', active: true },
+  { id: 'SLOT-02', label: 'Morning Slot 2', name: 'Morning Slot 2', startTime: '09:00 AM', endTime: '10:00 AM', start_time: '09:00:00', end_time: '10:00:00', active: true },
+  { id: 'SLOT-03', label: 'Late Morning Slot', name: 'Late Morning Slot', startTime: '10:00 AM', endTime: '11:00 AM', start_time: '10:00:00', end_time: '11:00:00', active: true },
+  { id: 'SLOT-04', label: 'Midday Slot', name: 'Midday Slot', startTime: '11:00 AM', endTime: '12:00 PM', start_time: '11:00:00', end_time: '12:00:00', active: true },
+  { id: 'SLOT-05', label: 'Afternoon Session 1', name: 'Afternoon Session 1', startTime: '01:00 PM', endTime: '02:00 PM', start_time: '13:00:00', end_time: '14:00:00', active: true },
+  { id: 'SLOT-06', label: 'Afternoon Session 2', name: 'Afternoon Session 2', startTime: '02:00 PM', endTime: '03:00 PM', start_time: '14:00:00', end_time: '15:00:00', active: true },
+  { id: 'SLOT-07', label: 'Afternoon Session 3', name: 'Afternoon Session 3', startTime: '03:00 PM', endTime: '04:00 PM', start_time: '15:00:00', end_time: '16:00:00', active: true },
+  { id: 'SLOT-08', label: 'Evening Slot 1', name: 'Evening Slot 1', startTime: '04:00 PM', endTime: '05:00 PM', start_time: '16:00:00', end_time: '17:00:00', active: true },
+  { id: 'SLOT-09', label: 'Evening Slot 2', name: 'Evening Slot 2', startTime: '05:00 PM', endTime: '06:00 PM', start_time: '17:00:00', end_time: '18:00:00', active: true }
 ];
 
 export const defaultFloors = [

@@ -23,15 +23,10 @@ import {
   ChevronDown, ChevronUp, Building2, Users, AlertTriangle, ArrowRight
 } from 'lucide-react';
 import toast from 'react-hot-toast';
+import { formatSlotTime, formatSlotRange, getSlotPeriod, formatSlotTitle, sortSlotsChronologically } from '../../utils/timeUtils.js';
 
-function format12HourTime(timeStr) {
-  if (!timeStr) return '';
-  if (timeStr.includes('AM') || timeStr.includes('PM')) return timeStr;
-  const [hours, minutes] = timeStr.split(':').map(Number);
-  const period = hours >= 12 ? 'PM' : 'AM';
-  const formattedHours = hours % 12 || 12;
-  return `${formattedHours}:${minutes < 10 ? '0' : ''}${minutes} ${period}`;
-}
+const format12HourTime = formatSlotTime;
+
 
 export default function LiveOccupancyPage() {
   // Filter states

@@ -8,6 +8,7 @@ import {
 import { format } from 'date-fns';
 import toast from 'react-hot-toast';
 import { waitlistService } from '../../services/waitlistService';
+import { formatSlotTime } from '../../utils/timeUtils';
 
 export default function WaitlistModal({
   isOpen,
@@ -28,14 +29,6 @@ export default function WaitlistModal({
   const formattedJoinedAt = summary?.studentEntry?.joinedAt 
     ? format(new Date(summary.studentEntry.joinedAt), 'MMM d, yyyy \at h:mm a')
     : 'Recently';
-
-  const format12HourTime = (timeStr) => {
-    if (!timeStr) return '';
-    const [hours, minutes] = timeStr.split(':').map(Number);
-    const period = hours >= 12 ? 'PM' : 'AM';
-    const formattedHours = hours % 12 || 12;
-    return `${formattedHours}:${minutes < 10 ? '0' : ''}${minutes} ${period}`;
-  };
 
   const handleJoin = async () => {
     if (!user || !slot || !dateStr) return;

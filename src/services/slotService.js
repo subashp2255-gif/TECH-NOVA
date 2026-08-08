@@ -272,5 +272,25 @@ export const slotService = {
       return data;
     }
     return { success: true };
+  },
+
+  async getDisabledOccurrences() {
+    try {
+      const { data, error } = await supabase
+        .from('slot_occurrences')
+        .select('*')
+        .or('status.eq.cancelled,status.eq.disabled,is_booking_enabled.eq.false');
+      if (!error && data) {
+        return data.map(d => ({
+          slotId: d.slot_id,
+          date: d.occurrence_date,
+          scope: 'SELECTED_DATE',
+          reason: d.cancellation_reason || d.disabled_reason || 'Cancelled by administrator'
+        }));
+      }
+    } catch { /* proceed to fallback */ }
+
+    const localList = (await db.read('seatsync_disabled_slots')) || [];
+    return localList;
   }
 };

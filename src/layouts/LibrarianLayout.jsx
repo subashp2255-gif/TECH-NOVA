@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Outlet, NavLink, useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../auth/AuthProvider';
 import {
-  LayoutDashboard, QrCode, UserCheck, BookmarkCheck, UserPlus, Users, Search,
+  LayoutDashboard, QrCode, UserCheck, BookmarkCheck, UserPlus, Users, UserX, Search,
   Eye, ShieldAlert, Wrench, AlertOctagon, Bell, History, BarChart3,
   ArrowRightLeft, User, LogOut, Menu, X, ChevronDown, ChevronRight, BookOpen,
   Sparkles, Clock, PanelLeftClose, PanelLeftOpen
@@ -40,6 +40,7 @@ const NAV_GROUPS = [
   {
     title: 'MANAGEMENT',
     items: [
+      { name: 'Student Access & Blocking', path: '/librarian/students', icon: UserX },
       { name: 'Notifications', path: '/librarian/notifications', icon: Bell },
       { name: 'Activity Logs', path: '/librarian/activity-logs', icon: History },
       { name: 'Reports & Analytics', path: '/librarian/analytics', icon: BarChart3 },

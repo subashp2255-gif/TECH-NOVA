@@ -10,15 +10,14 @@ import { Layers, Clock, RefreshCw, AlertTriangle, CheckCircle2, ShieldAlert, Use
 import DisableSlotModal from './DisableSlotModal';
 import { format, addDays } from 'date-fns';
 import toast from 'react-hot-toast';
+import {
+  formatSlotTime,
+  formatSlotRange,
+  getSlotPeriod,
+  formatSlotTitle,
+  sortSlotsChronologically
+} from '../../utils/timeUtils';
 
-function format12HourTime(timeStr) {
-  if (!timeStr) return '';
-  if (timeStr.includes('AM') || timeStr.includes('PM')) return timeStr;
-  const [hours, minutes] = timeStr.split(':').map(Number);
-  const period = hours >= 12 ? 'PM' : 'AM';
-  const formattedHours = hours % 12 || 12;
-  return `${formattedHours}:${minutes < 10 ? '0' : ''}${minutes} ${period}`;
-}
 
 export default function SlotConfigPage() {
   const { user } = useAuth();
@@ -65,7 +64,7 @@ export default function SlotConfigPage() {
         roomId: selectedRoomId,
         dateStr: selectedDate
       });
-      setSlots(data || []);
+      setSlots(sortSlotsChronologically(data || []));
     } catch (err) {
       toast.error('Failed to load slot configuration: ' + err.message);
     } finally {
@@ -187,9 +186,15 @@ export default function SlotConfigPage() {
                   >
                     <div className="flex flex-wrap items-start justify-between gap-3">
                       <div className="space-y-1">
-                        <div className="flex items-center gap-2">
-                          <span className="font-black text-navy text-sm sm:text-base">{s.slot_name}</span>
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="font-black text-navy text-sm sm:text-base">
+                            {formatSlotTitle(s.slot_name, s.start_time, s.end_time)}
+                          </span>
                           
+                          <Badge variant="outline" className="text-[10px] font-bold uppercase bg-white">
+                            {getSlotPeriod(s.start_time)}
+                          </Badge>
+
                           {isMasterDisabled ? (
                             <Badge className="bg-purple-600 text-white text-[10px] font-bold">
                               GLOBALLY DISABLED
@@ -212,7 +217,7 @@ export default function SlotConfigPage() {
                         </div>
 
                         <div className="text-xs text-slate-500 font-mono flex items-center gap-2">
-                          <span>{format12HourTime(s.start_time)} – {format12HourTime(s.end_time)}</span>
+                          <span>{formatSlotRange(s.start_time, s.end_time)}</span>
                         </div>
                       </div>
 

@@ -3,6 +3,8 @@ import { db } from './mockDatabase.js';
 import { slotService } from './slotService.js';
 import { defaultSlots } from '../data/seedData.js';
 import { format, addDays } from 'date-fns';
+import { sortSlotsChronologically } from '../utils/timeUtils.js';
+
 
 export const bookingService = {
   getTomorrowDateStr() {
@@ -32,7 +34,7 @@ export const bookingService = {
     // 1. Attempt fetching from Supabase
     try {
       const [{ data: slots }, { data: seats }, { data: bookings }] = await Promise.all([
-        supabase.from('slots').select('*').order('start_time'),
+        supabase.from('slots').select('*').eq('status', 'active').not('start_time', 'eq', '00:00:00').order('start_time'),
         supabase.from('seats').select('*'),
         supabase.from('bookings').select('*').eq('booking_date', dateStr)
       ]);
@@ -79,47 +81,48 @@ export const bookingService = {
 
     const disabledList = await slotService.getDisabledOccurrences().catch(() => []);
 
-    return sourceSlots.map(slot => {
-      const slotId = slot.id;
-      const disabledRecord = disabledList.find(d => 
-        d.slotId === slotId && 
-        (d.scope === 'ALL_FUTURE' || d.date === dateStr || (d.startDate <= dateStr && d.endDate >= dateStr))
-      );
-      const isDisabledByAdmin = slot.status === 'disabled' || slot.status === 'cancelled' || !!disabledRecord;
+      return sortSlotsChronologically(sourceSlots.map(slot => {
+        const slotId = slot.id;
+        const disabledRecord = disabledList.find(d => 
+          d.slotId === slotId && 
+          (d.scope === 'ALL_FUTURE' || d.date === dateStr || (d.startDate <= dateStr && d.endDate >= dateStr))
+        );
+        const isDisabledByAdmin = slot.status === 'disabled' || slot.status === 'cancelled' || !!disabledRecord;
 
-      const slotBookings = sourceBookings.filter(b => {
-        const bSlotId = b.slot_id || b.slotId;
-        const bDate = b.booking_date || b.bookingDate;
-        const bStatus = String(b.status || '').toLowerCase();
+        const slotBookings = sourceBookings.filter(b => {
+          const bSlotId = b.slot_id || b.slotId;
+          const bDate = b.booking_date || b.bookingDate;
+          const bStatus = String(b.status || '').toLowerCase();
 
-        return (bSlotId === slotId || bSlotId === slot.name || bSlotId === slot.label) &&
-          (bDate === dateStr) &&
-          ['confirmed', 'awaiting_check_in', 'checked_in', 'active', 'checkout_pending'].includes(bStatus);
-      });
+          return (bSlotId === slotId || bSlotId === slot.name || bSlotId === slot.label) &&
+            (bDate === dateStr) &&
+            ['confirmed', 'awaiting_check_in', 'checked_in', 'active', 'checkout_pending'].includes(bStatus);
+        });
 
-      const isBookedByStudent = studentId ? slotBookings.some(b => {
-        const bStudentId = b.student_id || b.studentId;
-        return String(bStudentId) === String(studentId);
-      }) : false;
+        const isBookedByStudent = studentId ? slotBookings.some(b => {
+          const bStudentId = b.student_id || b.studentId;
+          return String(bStudentId) === String(studentId);
+        }) : false;
 
-      const bookedCount = slotBookings.length;
-      const availableCount = isDisabledByAdmin ? 0 : Math.max(0, activeSeatsCount - bookedCount);
+        const bookedCount = slotBookings.length;
+        const availableCount = isDisabledByAdmin ? 0 : Math.max(0, activeSeatsCount - bookedCount);
 
-      return {
-        id: slot.id,
-        name: slot.name || slot.label,
-        label: slot.label || slot.name,
-        startTime: slot.startTime || slot.start_time,
-        endTime: slot.endTime || slot.end_time,
-        totalCount: activeSeatsCount,
-        bookedCount,
-        availableCount,
-        isFullyBooked: availableCount === 0,
-        isBookedByStudent,
-        isDisabledByAdmin,
-        disabledReason: disabledRecord ? disabledRecord.reason : (slot.cancellation_reason || null)
-      };
-    });
+        return {
+          id: slot.id,
+          name: slot.name || slot.label,
+          label: slot.label || slot.name,
+          startTime: slot.startTime || slot.start_time,
+          endTime: slot.endTime || slot.end_time,
+          totalCount: activeSeatsCount,
+          bookedCount,
+          availableCount,
+          isFullyBooked: availableCount === 0,
+          isBookedByStudent,
+          isDisabledByAdmin,
+          disabledReason: disabledRecord ? disabledRecord.reason : (slot.cancellation_reason || null)
+        };
+      }));
+
   },
 
   async getMyBookings(studentId) {
@@ -182,9 +185,10 @@ export const bookingService = {
 
   async getSeatsForSlot(floorId, dateStr, slotId, currentUserId = null) {
     try {
-      const [{ data: seats }, { data: bookings }] = await Promise.all([
+      const [{ data: seats }, { data: bookings }, { data: maintenanceList }] = await Promise.all([
         supabase.from('seats').select('*').order('seat_number', { ascending: true }),
-        supabase.from('bookings').select('*').eq('booking_date', dateStr)
+        supabase.from('bookings').select('*').eq('booking_date', dateStr),
+        supabase.from('seat_maintenance').select('seat_id, status, issue_type').in('status', ['reported', 'in_progress'])
       ]);
 
       if (seats && seats.length > 0) {
@@ -202,8 +206,14 @@ export const bookingService = {
           if (seatKey) bookingMap.set(seatKey, b);
         });
 
+        const maintenanceMap = new Map();
+        (maintenanceList || []).forEach(m => {
+          if (m.seat_id) maintenanceMap.set(m.seat_id, m);
+        });
+
         return onlineSeats.map(s => {
           const booking = bookingMap.get(s.id);
+          const activeMaint = maintenanceMap.get(s.id);
           const isUserBooked = Boolean(currentUserId && booking && String(booking.student_id || booking.studentId) === String(currentUserId));
           const bookingStatus = String(booking?.status || '').toLowerCase();
           const bookingSource = String(booking?.booking_source || '').toLowerCase();
@@ -211,7 +221,7 @@ export const bookingService = {
           let uiStatus = 'Available';
           let statusState = 'available';
 
-          if (s.status === 'maintenance') {
+          if (s.status === 'maintenance' || s.is_active === false || activeMaint) {
             uiStatus = 'Maintenance';
             statusState = 'maintenance';
           } else if (isUserBooked) {
@@ -492,6 +502,19 @@ export const bookingService = {
       const libId = libRow?.id;
       const roomId = roomRow?.id;
       const fId = (isUUID(floorId) ? floorId : roomRow?.floor_id) || floorRow?.id;
+
+      if (isUUID(resolvedSeatId)) {
+        const { data: maintCheck } = await supabase
+          .from('seat_maintenance')
+          .select('id, issue_type')
+          .eq('seat_id', resolvedSeatId)
+          .in('status', ['reported', 'in_progress'])
+          .maybeSingle();
+
+        if (maintCheck) {
+          throw new Error('This seat is currently under maintenance. Please select another seat.');
+        }
+      }
 
       if (libId && roomId && fId && isUUID(resolvedSeatId) && isUUID(resolvedSlotId)) {
         const { data: result, error } = await supabase.rpc('create_seat_booking', {

@@ -64,7 +64,17 @@ export const AuthProvider = ({ children }) => {
           const status = String(updated.status || updated.account_status || 'active').toLowerCase();
 
           if (status === 'blocked' || status === 'suspended') {
-            toast.error(`ALERT: Your account was ${status.toUpperCase()} by an administrator.`);
+            const blockedInfo = {
+              reason: updated.blocked_reason || 'Policy violation',
+              blockedAt: updated.blocked_at || new Date().toISOString(),
+              blockedBy: 'Library Administration'
+            };
+            try {
+              sessionStorage.setItem('seatsync_blocked_info', JSON.stringify(blockedInfo));
+              localStorage.setItem('seatsync_blocked_info', JSON.stringify(blockedInfo));
+            } catch { /* fallback */ }
+
+            toast.error(`ALERT: Your account access was ${status.toUpperCase()} by library staff.`);
             await authService.logout();
             setUser(null);
             const base = import.meta.env.BASE_URL || '/';

@@ -9,38 +9,37 @@ import { Card, CardContent } from '../../components/shared/Card';
 import { Button } from '../../components/shared/Button';
 import { Badge } from '../../components/shared/Badge';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '../../components/shared/Dialog';
-import { 
-  Clock, Armchair, Shield, CheckCircle2, ChevronRight, AlertCircle, 
+import {
+  Clock, Armchair, Shield, CheckCircle2, ChevronRight, AlertCircle,
   MapPin, Sparkles, Filter, Lock, Check, Zap, Users, ShieldAlert, Ban
 } from 'lucide-react';
 import { format, addDays } from 'date-fns';
 import toast from 'react-hot-toast';
+import {
+  formatSlotTime,
+  formatSlotRange,
+  getSlotPeriod,
+  formatSlotTitle,
+  sortSlotsChronologically
+} from '../../utils/timeUtils';
 
-function format12HourTime(timeStr) {
-  if (!timeStr) return '';
-  if (timeStr.includes('AM') || timeStr.includes('PM')) return timeStr;
-  const [hours, minutes] = timeStr.split(':').map(Number);
-  const period = hours >= 12 ? 'PM' : 'AM';
-  const formattedHours = hours % 12 || 12;
-  return `${formattedHours}:${minutes < 10 ? '0' : ''}${minutes} ${period}`;
-}
 
 export default function FindSeat() {
   const navigate = useNavigate();
   const { user } = useAuth();
-  
+
   const tomorrowDate = useMemo(() => format(addDays(new Date(), 1), 'yyyy-MM-dd'), []);
-  
+
   const [floors, setFloors] = useState([]);
   const [selectedFloor, setSelectedFloor] = useState(null);
-  
+
   const [slots, setSlots] = useState([]);
   const [selectedSlot, setSelectedSlot] = useState(null);
-  
+
   const [seats, setSeats] = useState([]);
   const [selectedZone, setSelectedZone] = useState('ALL');
   const [selectedSeat, setSelectedSeat] = useState(null);
-  
+
   const [loadingSlots, setLoadingSlots] = useState(true);
   const [loadingSeats, setLoadingSeats] = useState(false);
   const [bookingLoading, setBookingLoading] = useState(false);
@@ -53,14 +52,15 @@ export default function FindSeat() {
         bookingService.getFloors(),
         slotService.getStudentSlots({ bookingDate: tomorrowDate })
       ]);
-      
+
       setFloors(floorsData || []);
       if (floorsData && floorsData.length > 0 && !selectedFloor) {
         setSelectedFloor(floorsData[0]);
       }
 
+      let mappedSlots = [];
       if (studentSlots && studentSlots.length > 0) {
-        setSlots(studentSlots.map(s => ({
+        mappedSlots = studentSlots.map(s => ({
           id: s.slot_id,
           slot_occurrence_id: s.slot_occurrence_id,
           name: s.slot_name,
@@ -75,16 +75,19 @@ export default function FindSeat() {
           studentBookingStatus: s.student_booking_status,
           availableCount: s.is_booking_enabled ? 40 : 0,
           totalCount: 40
-        })));
+        }));
       } else {
         // Fallback default slots availability
         const availableSlots = await bookingService.getSlotsAvailability(tomorrowDate, user?.id);
-        setSlots(availableSlots.map(s => ({
+        mappedSlots = availableSlots.map(s => ({
           ...s,
           effectiveStatus: s.isDisabledByAdmin ? 'cancelled' : 'active',
           isBookingEnabled: !s.isDisabledByAdmin
-        })));
+        }));
       }
+
+      setSlots(sortSlotsChronologically(mappedSlots));
+
     } catch (err) {
       toast.error('Failed to load slots availability: ' + err.message);
     } finally {
@@ -196,10 +199,12 @@ export default function FindSeat() {
             </Card>
           ) : (
             <div className="grid gap-3" style={{ gridTemplateColumns: 'repeat(auto-fill,minmax(min(100%,260px),1fr))' }}>
-              {slots.map((slot, index) => {
+              {slots.map((slot) => {
                 const isCancelled = slot.effectiveStatus === 'cancelled' || slot.effectiveStatus === 'globally_disabled' || slot.effectiveStatus === 'disabled' || slot.isBookingEnabled === false;
                 const isAlreadyBooked = Boolean(slot.hasStudentBooking && slot.studentBookingStatus && slot.studentBookingStatus !== 'cancelled');
-                const isMorning = index < 4;
+                const period = getSlotPeriod(slot.startTime);
+                const slotTitle = formatSlotTitle(slot.name || slot.label, slot.startTime, slot.endTime);
+                const slotRangeStr = formatSlotRange(slot.startTime, slot.endTime);
 
                 return (
                   <Card
@@ -215,20 +220,19 @@ export default function FindSeat() {
                       }
                       setSelectedSlot(slot);
                     }}
-                    className={`transition-all border-2 rounded-2xl p-4 relative overflow-hidden ${
-                      isCancelled
-                        ? 'border-red-500 bg-red-50/60 cursor-not-allowed shadow-xs'
-                        : isAlreadyBooked
+                    className={`transition-all border-2 rounded-2xl p-4 relative overflow-hidden ${isCancelled
+                      ? 'border-red-500 bg-red-50/60 cursor-not-allowed shadow-xs'
+                      : isAlreadyBooked
                         ? 'border-emerald-500 bg-emerald-50/30 cursor-pointer shadow-xs'
                         : 'border-slate-200 hover:border-brandBlue/50 hover:shadow-md bg-white cursor-pointer'
-                    }`}
+                      }`}
                   >
                     <CardContent className="p-0 space-y-3">
                       <div className="flex justify-between items-start gap-1.5">
                         <Badge variant="outline" className="text-[10px] font-bold uppercase bg-white">
-                          {isMorning ? 'Morning' : 'Afternoon'}
+                          {period}
                         </Badge>
-                        
+
                         {isCancelled ? (
                           <Badge className="bg-red-600 text-white font-bold text-[10px] uppercase shadow-xs">
                             CANCELLED BY ADMIN
@@ -245,9 +249,10 @@ export default function FindSeat() {
                       </div>
 
                       <div>
-                        <h3 className="text-sm font-black text-navy">{slot.label || slot.name}</h3>
-                        <p className="text-[10px] text-slate-500 font-mono font-semibold">
-                          {format12HourTime(slot.startTime)} – {format12HourTime(slot.endTime)}
+                        <h3 className="text-sm font-black text-navy">{slotTitle}</h3>
+                        <p className="text-[10px] text-slate-500 font-mono font-semibold flex items-center gap-1 mt-0.5">
+                          <Clock size={11} className="text-brandBlue shrink-0" />
+                          {slotRangeStr}
                         </p>
                       </div>
 
@@ -297,11 +302,14 @@ export default function FindSeat() {
           <div className="flex flex-wrap items-center justify-between gap-3 bg-white p-4 border border-slate-200 rounded-2xl shadow-xs">
             <div>
               <div className="flex items-center gap-2">
-                <Badge className="bg-brandBlue text-white font-bold text-xs">{selectedSlot.label || selectedSlot.name}</Badge>
+                <Badge className="bg-brandBlue text-white font-bold text-xs">
+                  {formatSlotTitle(selectedSlot.name || selectedSlot.label, selectedSlot.startTime, selectedSlot.endTime)}
+                </Badge>
                 <span className="text-xs text-slate-500 font-mono font-bold">
-                  {format12HourTime(selectedSlot.startTime)} – {format12HourTime(selectedSlot.endTime)}
+                  {formatSlotRange(selectedSlot.startTime, selectedSlot.endTime)}
                 </span>
               </div>
+
               <p className="text-xs text-slate-500 mt-1">
                 Selected Floor: <strong className="text-navy">{selectedFloor?.name}</strong>
               </p>
@@ -365,14 +373,14 @@ export default function FindSeat() {
                             ${isSelected
                               ? 'bg-brandBlue text-white border-brandBlue ring-4 ring-brandBlue/20 scale-105 shadow-md z-10'
                               : isUserBooked
-                              ? 'bg-emerald-600 text-white border-emerald-600 cursor-not-allowed font-bold'
-                              : seat.status_state === 'occupied'
-                              ? 'bg-rose-100 text-rose-800 border-rose-200 cursor-not-allowed opacity-80'
-                              : seat.status_state === 'reserved'
-                              ? 'bg-amber-100 text-amber-800 border-amber-200 cursor-not-allowed opacity-80'
-                              : seat.status_state === 'maintenance'
-                              ? 'bg-slate-200 text-slate-500 border-slate-300 cursor-not-allowed'
-                              : 'bg-emerald-50 text-emerald-900 border-emerald-200 hover:border-brandBlue hover:bg-brandBlue/10 hover:scale-105 cursor-pointer font-bold'}
+                                ? 'bg-emerald-600 text-white border-emerald-600 cursor-not-allowed font-bold'
+                                : seat.status_state === 'occupied'
+                                  ? 'bg-rose-100 text-rose-800 border-rose-200 cursor-not-allowed opacity-80'
+                                  : seat.status_state === 'reserved'
+                                    ? 'bg-amber-100 text-amber-800 border-amber-200 cursor-not-allowed opacity-80'
+                                    : seat.status_state === 'maintenance'
+                                      ? 'bg-slate-200 text-slate-500 border-slate-300 cursor-not-allowed'
+                                      : 'bg-emerald-50 text-emerald-900 border-emerald-200 hover:border-brandBlue hover:bg-brandBlue/10 hover:scale-105 cursor-pointer font-bold'}
                           `}
                         >
                           <span className="text-xs font-bold">{seat.seatNumber}</span>
@@ -464,7 +472,7 @@ export default function FindSeat() {
               </div>
               <div className="flex justify-between py-1 border-b border-slate-200/60">
                 <span className="text-slate-500 font-medium">Time Slot:</span>
-                <span className="font-bold text-navy">{selectedSlot.label || selectedSlot.name} ({format12HourTime(selectedSlot.startTime)} - {format12HourTime(selectedSlot.endTime)})</span>
+                <span className="font-bold text-navy">{formatSlotTitle(selectedSlot.name || selectedSlot.label, selectedSlot.startTime, selectedSlot.endTime)}</span>
               </div>
               <div className="flex justify-between py-1">
                 <span className="text-slate-500 font-medium">Selected Seat:</span>

@@ -730,76 +730,177 @@ export const librarianService = {
     return target;
   },
 
-  // 7. SEAT MAINTENANCE
-  async reportSeatMaintenance({ seatNumber, category, description, priority, expectedResolution, staffUser }) {
+  // 7. SEAT INVENTORY & MAINTENANCE ENGINE (RPC)
+  async getSeatInventory({ libraryId = null, floorId = null, roomId = null, search = null, maintenanceStatus = null } = {}) {
     try {
+      const { data, error } = await supabase.rpc('get_seat_inventory', {
+        p_library_id: libraryId && isUUID(libraryId) ? libraryId : null,
+        p_floor_id: floorId && isUUID(floorId) ? floorId : null,
+        p_room_id: roomId && isUUID(roomId) ? roomId : null,
+        p_search: search && search.trim() ? search.trim() : null,
+        p_maintenance_status: maintenanceStatus && maintenanceStatus.trim() ? maintenanceStatus.trim() : null
+      });
+
+      if (error) {
+        console.error('[librarianService] get_seat_inventory error:', error);
+        throw error;
+      }
+
+      return (data || []).map(s => ({
+        id: s.seat_id,
+        seatNumber: s.seat_number,
+        type: s.seat_type,
+        libraryId: s.library_id,
+        libraryName: s.library_name,
+        floorId: s.floor_id,
+        floorName: s.floor_name,
+        roomId: s.room_id,
+        roomName: s.room_name,
+        hasPowerSocket: Boolean(s.has_power_outlet),
+        isAccessible: Boolean(s.is_accessible),
+        isActive: Boolean(s.seat_is_active),
+        operationalStatus: s.operational_status, // 'available' | 'maintenance' | 'inactive'
+        maintenanceId: s.maintenance_id,
+        maintenanceStatus: s.maintenance_status, // 'reported' | 'in_progress' | 'resolved'
+        issueType: s.issue_type,
+        description: s.issue_description,
+        severity: s.severity, // 'low' | 'medium' | 'high' | 'critical'
+        reportedAt: s.reported_at,
+        reportedBy: s.reported_by,
+        reportedByName: s.reported_by_name || 'Staff Librarian',
+        assignedTo: s.assigned_to,
+        assignedToName: s.assigned_to_name,
+        expectedResolutionAt: s.expected_resolution_at,
+        resolvedAt: s.resolved_at,
+        resolutionNotes: s.resolution_notes
+      }));
+    } catch (err) {
+      console.warn('[librarianService] getSeatInventory notice:', err.message);
+      throw err;
+    }
+  },
+
+  async reportSeatMaintenance({ seatId, seatNumber, issueType, category, description, severity, priority, expectedResolutionAt, assignedTo }) {
+    let targetSeatId = seatId;
+
+    if (!targetSeatId && seatNumber) {
       const { data: seatData } = await supabase.from('seats').select('id').or(`seat_number.eq.${seatNumber},id.eq.${seatNumber}`).maybeSingle();
-      if (seatData) {
-        await supabase.from('seats').update({ status: 'maintenance' }).eq('id', seatData.id);
-        const { data, error } = await supabase.rpc('set_seat_maintenance', {
-          p_seat_id: seatData.id,
-          p_reason: description || 'Flagged for maintenance',
-          p_category: category || 'Desk Maintenance',
-          p_priority: priority || 'Medium'
-        });
-        if (!error && data && data.success) {
-          return { id: data.ticket_id, seatNumber, status: 'Reported' };
-        }
-      }
-    } catch { /* fallback */ }
-
-    const seats = (await db.read('seatsync_seats')) || [];
-    const seatObj = seats.find(s => s.seatNumber === seatNumber || String(s.id) === String(seatNumber));
-    if (seatObj) {
-      seatObj.status = 'maintenance';
-      await db.write('seatsync_seats', seats);
+      if (seatData) targetSeatId = seatData.id;
     }
 
-    const maintenanceList = (await db.read('seatsync_maintenance')) || [];
-    const ticket = {
-      id: `MNT-${Date.now()}`,
-      seatNumber,
-      category: category || 'Desk Maintenance',
-      description: description || 'Flagged for maintenance',
-      priority: priority || 'Medium',
-      reportedAt: new Date().toISOString(),
-      status: 'Reported'
-    };
-    maintenanceList.push(ticket);
-    await db.write('seatsync_maintenance', maintenanceList);
-    return ticket;
+    if (!targetSeatId) {
+      throw new Error('Please select a valid seat.');
+    }
+
+    const { data, error } = await supabase.rpc('report_seat_maintenance', {
+      p_seat_id: targetSeatId,
+      p_issue_type: issueType || category || 'General Maintenance',
+      p_description: description || 'Flagged for maintenance',
+      p_severity: (severity || priority || 'medium').toLowerCase(),
+      p_expected_resolution_at: expectedResolutionAt || null,
+      p_assigned_to: assignedTo && isUUID(assignedTo) ? assignedTo : null
+    });
+
+    if (error) {
+      console.error('[librarianService] report_seat_maintenance RPC error:', error);
+      throw new Error(error.message || 'Failed to report maintenance issue.');
+    }
+
+    if (data && !data.success) {
+      throw new Error(data.message || 'Maintenance report rejected.');
+    }
+
+    return data;
   },
 
-  async resolveSeatMaintenance(seatNumberOrId) {
-    try {
-      const { data: seatData } = await supabase.from('seats').select('id, seat_number').or(`seat_number.eq.${seatNumberOrId},id.eq.${seatNumberOrId}`).maybeSingle();
-      if (seatData) {
-        await supabase.from('seats').update({ status: 'available' }).eq('id', seatData.id);
-        await supabase.from('seat_maintenance').update({ status: 'Resolved' }).eq('seat_id', seatData.id);
-      }
-    } catch { /* fallback */ }
-
-    const seats = (await db.read('seatsync_seats')) || [];
-    const seatObj = seats.find(s => s.seatNumber === seatNumberOrId || String(s.id) === String(seatNumberOrId));
-    if (seatObj) {
-      seatObj.status = 'active';
-      await db.write('seatsync_seats', seats);
+  async updateMaintenanceStatus({ maintenanceId, status, severity, assignedTo, expectedResolutionAt }) {
+    if (!maintenanceId || !isUUID(maintenanceId)) {
+      throw new Error('Invalid maintenance ticket ID.');
     }
 
-    const maintenanceList = (await db.read('seatsync_maintenance')) || [];
-    const remaining = maintenanceList.filter(m => m.seatNumber !== seatNumberOrId && m.seat_id !== seatNumberOrId);
-    await db.write('seatsync_maintenance', remaining);
-    return true;
+    const { data, error } = await supabase.rpc('update_seat_maintenance', {
+      p_maintenance_id: maintenanceId,
+      p_status: status,
+      p_severity: severity || null,
+      p_assigned_to: assignedTo && isUUID(assignedTo) ? assignedTo : null,
+      p_expected_resolution_at: expectedResolutionAt || null
+    });
+
+    if (error) {
+      console.error('[librarianService] update_seat_maintenance RPC error:', error);
+      throw new Error(error.message || 'Failed to update maintenance status.');
+    }
+
+    if (data && !data.success) {
+      throw new Error(data.message || 'Maintenance update rejected.');
+    }
+
+    return data;
   },
 
-  async updateMaintenanceStatus(ticketId, status, resolutionNotes, staffUser) {
-    const maintenanceList = (await db.read('seatsync_maintenance')) || [];
-    const ticket = maintenanceList.find(m => String(m.id) === String(ticketId));
-    if (ticket) {
-      ticket.status = status;
-      await db.write('seatsync_maintenance', maintenanceList);
+  async resolveSeatMaintenance(maintenanceIdOrSeatNumber, resolutionNotes = 'Issue resolved & verified.') {
+    let maintId = maintenanceIdOrSeatNumber;
+
+    if (maintId && !isUUID(maintId)) {
+      const { data: seatData } = await supabase.from('seats').select('id').eq('seat_number', maintId).maybeSingle();
+      if (seatData) {
+        const { data: maintRow } = await supabase
+          .from('seat_maintenance')
+          .select('id')
+          .eq('seat_id', seatData.id)
+          .in('status', ['reported', 'in_progress'])
+          .maybeSingle();
+        if (maintRow) maintId = maintRow.id;
+      }
     }
-    return ticket || { id: ticketId, status };
+
+    if (!maintId || !isUUID(maintId)) {
+      throw new Error('No active maintenance record found to resolve.');
+    }
+
+    const { data, error } = await supabase.rpc('resolve_seat_maintenance', {
+      p_maintenance_id: maintId,
+      p_resolution_notes: resolutionNotes
+    });
+
+    if (error) {
+      console.error('[librarianService] resolve_seat_maintenance RPC error:', error);
+      throw new Error(error.message || 'Failed to resolve seat maintenance.');
+    }
+
+    if (data && !data.success) {
+      throw new Error(data.message || 'Resolution failed.');
+    }
+
+    return data;
+  },
+
+  async addNewSeat({ libraryId, floorId, roomId, seatNumber, seatType, hasPowerSocket = false, isAccessible = false, allocationMode = 'student_selectable' }) {
+    if (!libraryId || !floorId || !roomId || !seatNumber) {
+      throw new Error('Library, floor, room, and seat number are required.');
+    }
+
+    const { data, error } = await supabase.rpc('add_new_seat', {
+      p_library_id: libraryId,
+      p_floor_id: floorId,
+      p_room_id: roomId,
+      p_seat_number: seatNumber.trim().toUpperCase(),
+      p_seat_type: seatType || 'Standard Study Desk',
+      p_has_power_socket: Boolean(hasPowerSocket),
+      p_is_accessible: Boolean(isAccessible),
+      p_allocation_mode: allocationMode || 'student_selectable'
+    });
+
+    if (error) {
+      console.error('[librarianService] add_new_seat RPC error:', error);
+      throw new Error(error.message || 'Failed to create seat.');
+    }
+
+    if (data && !data.success) {
+      throw new Error(data.message || 'Seat creation rejected.');
+    }
+
+    return data;
   },
 
   // 8. INCIDENT REPORTS
@@ -911,6 +1012,102 @@ export const librarianService = {
     bookings.push(newBooking);
     await db.write('seatsync_bookings', bookings);
     return newBooking;
+  },
+
+  // 12. NO-SHOW & STANDING MONITOR ENGINE
+  async getStudentNoShowStandings(libraryId = null) {
+    try {
+      const { data, error } = await supabase.rpc('get_student_no_show_standings', {
+        p_library_id: libraryId && isUUID(libraryId) ? libraryId : null
+      });
+
+      if (!error && Array.isArray(data)) {
+        return data.map(r => ({
+          student_id: r.student_id,
+          id: r.student_id,
+          student_name: r.student_name,
+          name: r.student_name,
+          college_id: r.college_id,
+          collegeId: r.college_id,
+          department: r.department,
+          no_show_count: r.no_show_count,
+          noShowCount: r.no_show_count,
+          max_no_shows: r.max_no_shows || 3,
+          maxNoShows: r.max_no_shows || 3,
+          account_standing: r.account_standing,
+          accountStanding: r.account_standing,
+          is_restricted: r.is_restricted,
+          isRestricted: r.is_restricted,
+          restriction_start_at: r.restriction_start_at,
+          restriction_end_at: r.restriction_end_at
+        }));
+      }
+      if (error) console.warn('[librarianService] get_student_no_show_standings RPC error:', error.message);
+    } catch (err) {
+      console.warn('[librarianService] getStudentNoShowStandings notice:', err.message);
+    }
+
+    // Fallback if DB RPC fails
+    const users = (await db.read('seatsync_users')) || [];
+    return users.filter(u => u.role === 'STUDENT').map(u => ({
+      student_id: u.id,
+      id: u.id,
+      student_name: u.name || u.full_name,
+      name: u.name || u.full_name,
+      college_id: u.collegeId || u.identifier || 'N/A',
+      collegeId: u.collegeId || u.identifier || 'N/A',
+      department: u.department || 'General',
+      no_show_count: u.noShowCount || 0,
+      noShowCount: u.noShowCount || 0,
+      max_no_shows: 3,
+      maxNoShows: 3,
+      account_standing: (u.noShowCount || 0) >= 3 ? 'Restricted' : ((u.noShowCount || 0) === 2 ? 'Final Warning' : ((u.noShowCount || 0) === 1 ? 'Warning' : 'Good Standing')),
+      accountStanding: (u.noShowCount || 0) >= 3 ? 'Restricted' : ((u.noShowCount || 0) === 2 ? 'Final Warning' : ((u.noShowCount || 0) === 1 ? 'Warning' : 'Good Standing')),
+      is_restricted: (u.noShowCount || 0) >= 3 || u.accountStatus === 'restricted',
+      isRestricted: (u.noShowCount || 0) >= 3 || u.accountStatus === 'restricted'
+    }));
+  },
+
+  async resetStudentNoShowStanding(studentId, reason) {
+    const cleanReason = String(reason || '').trim();
+    if (!cleanReason) {
+      throw new Error('Resolution reason is required to reset student standing.');
+    }
+
+    if (isUUID(studentId)) {
+      const { data, error } = await supabase.rpc('reset_student_no_show_standing', {
+        p_student_id: studentId,
+        p_reason: cleanReason
+      });
+
+      if (error) throw new Error(error.message);
+      return data;
+    }
+
+    // Mock fallback
+    const users = (await db.read('seatsync_users')) || [];
+    const target = users.find(u => u.id === studentId);
+    if (target) {
+      target.noShowCount = 0;
+      target.accountStatus = 'active';
+      await db.write('seatsync_users', users);
+    }
+    return { success: true };
+  },
+
+  async warnStudentNoShow(studentId, warningMessage = null) {
+    if (isUUID(studentId)) {
+      const { data, error } = await supabase.rpc('warn_student_no_show', {
+        p_student_id: studentId,
+        p_message: warningMessage || null
+      });
+
+      if (error) throw new Error(error.message);
+      return data;
+    }
+
+    // Mock fallback
+    return { success: true };
   }
 };
 

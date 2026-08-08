@@ -23,6 +23,7 @@ import {
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import WaitlistModal from '../../components/student/WaitlistModal';
+import { formatSlotTime, formatSlotRange, getSlotPeriod, formatSlotTitle, sortSlotsChronologically } from '../../utils/timeUtils.js';
 
 function getBookingState(booking) {
     if (!booking) return null;
@@ -80,14 +81,8 @@ function getBookingState(booking) {
     return 'UPCOMING';
 }
 
-function format12HourTime(timeStr) {
-    if (!timeStr) return '';
-    if (timeStr.includes('AM') || timeStr.includes('PM')) return timeStr;
-    const [hours, minutes] = timeStr.split(':').map(Number);
-    const period = hours >= 12 ? 'PM' : 'AM';
-    const formattedHours = hours % 12 || 12;
-    return `${formattedHours}:${minutes < 10 ? '0' : ''}${minutes} ${period}`;
-}
+const format12HourTime = formatSlotTime;
+
 
 export default function Dashboard() {
     const { user } = useAuth();

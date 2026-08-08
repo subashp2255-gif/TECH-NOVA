@@ -157,7 +157,7 @@ const router = createBrowserRouter([
       { path: 'lookup', element: <BookingLookupPage /> },
       { path: 'occupancy', element: <LiveOccupancyPage /> },
       { path: 'no-shows', element: <NoShowsMonitorPage /> },
-      { path: 'students', element: <Navigate to="/librarian/no-shows" replace /> },
+      { path: 'students', element: <StudentManagementPage /> },
       { path: 'maintenance', element: <SeatMaintenancePage /> },
       { path: 'incidents', element: <Navigate to="/librarian/maintenance" replace /> },
       { path: 'notifications', element: <LibrarianNotificationsPage /> },
